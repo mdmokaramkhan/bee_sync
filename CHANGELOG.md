@@ -43,7 +43,7 @@
 ### Known limitations
 * iOS `BGTaskScheduler` doesn't run on the Simulator, so the scheduled iOS tasks have not been tested on a device yet. The upload when the app goes to the background is verified on the Simulator.
 * Android force-stop and iOS force-quit cancel all background work until the user opens the app again (an OS rule). Events are kept and sent on the next launch.
-* Auth headers are stored unencrypted in the app's database so native code can use them. Encryption at rest is planned for 0.3.
+* Auth headers are stored unencrypted in the app's database so native code can use them. Encryption at rest is planned after 1.0.
 
 ### Testing
 * 151 Dart tests, 68 Android tests (Robolectric), 11 iOS tests (XCTest). Deliberately broken uploader logic fails the same shared cases on all three runtimes.

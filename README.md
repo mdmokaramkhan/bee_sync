@@ -4,7 +4,7 @@ Durable, offline-first event delivery for Flutter.
 
 Every event is written to an on-device SQLite queue **before** any network attempt, then delivered in batches (or right away, for high-priority events) with retries, backoff, consent controls and bounded storage. Delivery is **at-least-once**: each event carries a UUIDv7 `id`, and your server should dedupe on it.
 
-> **Status: 0.2.0.** Delivery while the app runs, plus native background delivery on Android (WorkManager) and iOS (upload when backgrounded, plus BGTaskScheduler). Encryption at rest comes in 0.3. See [CHANGELOG.md](CHANGELOG.md) and [doc/DESIGN.md](doc/DESIGN.md).
+> **Status: 0.2.0.** Delivery while the app runs, plus native background delivery on Android (WorkManager) and iOS (upload when backgrounded, plus BGTaskScheduler). Encryption at rest is planned after 1.0. See [CHANGELOG.md](CHANGELOG.md) and [doc/DESIGN.md](doc/DESIGN.md).
 
 ## Install
 
@@ -155,7 +155,7 @@ Auth tokens: the background uploader uses the headers you last set. If they expi
 
 ## Data on the device
 
-Queued events, and the `HttpTransport` headers that native code needs, live in a SQLite file in the app's private storage (`Application Support/bee_sync/bee_sync.db`). In 0.2 they are **not encrypted**; encryption at rest is planned for 0.3. Retention limits (`maxEvents`, `maxBytes`, `maxAge`) cap what's kept, and `setConsent(ConsentState.denied, purge: true)` deletes the queue.
+Queued events, and the `HttpTransport` headers that native code needs, live in a SQLite file in the app's private storage (`Application Support/bee_sync/bee_sync.db`). They are **not encrypted**; encryption at rest is planned after 1.0, so don't put secrets in event properties. Retention limits (`maxEvents`, `maxBytes`, `maxAge`) cap what's kept, and `setConsent(ConsentState.denied, purge: true)` deletes the queue.
 
 ## Custom transports
 

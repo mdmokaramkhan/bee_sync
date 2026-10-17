@@ -19,7 +19,7 @@ Delivery guarantee: **at-least-once**. Every event carries a client-generated UU
 | G3 | Priority tiers: `immediate` (sent right after persist) and `normal` (batched). |
 | G4 | First-class consent: grant / deny / unknown, with hold or purge semantics. |
 | G5 | Bounded storage: max events, max bytes, max age, explicit overflow policy. |
-| G6 | Optional encryption at rest of event payloads. |
+| G6 | Optional encryption at rest of event payloads. *Deferred until after 1.0 (decided 2026-10-18).* |
 | G7 | Pluggable transport in the foreground; a standard HTTP transport everywhere. |
 | G8 | Observability: stats stream, delivery/drop callbacks, background log visible from Dart. |
 | G9 | Fully testable core: injectable clock, store, transport, scheduler. |
@@ -167,7 +167,7 @@ CREATE INDEX events_ready ON events (lease_owner, priority DESC, seq);
 
 CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
 -- keys: consent_state, transport_config (JSON), delivery_config (JSON),
---       flush_not_before (global backoff), auth_blocked; v0.3: wrapped_data_key
+--       flush_not_before (global backoff), auth_blocked; post-1.0: wrapped_data_key
 -- See spec/uploader_contract.md §1 for formats and who writes each key.
 
 CREATE TABLE counters (key TEXT PRIMARY KEY, value INTEGER NOT NULL DEFAULT 0);
@@ -294,7 +294,7 @@ Consent state is persisted, so a denial survives restarts and is respected by th
 2. While over `maxEvents` / `maxBytes`: `dropOldest` evicts oldest **normal** events first, then oldest immediate; `dropNewest` rejects the incoming event.
 3. Leased events are never evicted mid-flight.
 
-**Encryption** (`EncryptionConfig.platformKey()`):
+**Encryption** (`EncryptionConfig.platformKey()`), *deferred until after 1.0; the design below is kept for then*:
 - On first init, native generates a random 256-bit data key, wraps it with a non-exportable Keystore key (Android) / stores it in Keychain with `kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly` (iOS). The `AfterFirstUnlock` class is required so background tasks can read it while the device is locked.
 - Dart fetches the unwrapped data key once per process over the method channel and encrypts payloads with AES-256-GCM (`package:cryptography`). Nonce (12 B) is prefixed to the ciphertext; the event `id` is the AAD, binding ciphertext to its row.
 - Native decrypts with `javax.crypto` / CryptoKit before building the request body.
@@ -336,7 +336,7 @@ The Dart and native serializers are checked against the same golden fixtures (`s
 - `events` stream: `Delivered(ids)`, `Dropped(ids, reason)`, `FlushFailed(error, nextRetryAt)`.
 - `BeeLogger` interface with levels; never logs payload contents above `trace`.
 - `backgroundLog()` reads `bg_log`, so apps can see what native did while Dart wasn't running.
-- v0.3: `BeeSyncInspector` debug widget (queue contents, last request/response, force flush, simulate offline).
+- Planned for v0.3: `BeeSyncInspector` debug widget (queue contents, last request/response, force flush, simulate offline).
 
 ---
 
@@ -386,8 +386,10 @@ Dependencies (kept minimal): `sqflite`, `path_provider`, `uuid`, `cryptography`,
 |---|---|---|
 | **v0.1** — Dart core ✅ | API, sqflite store, claim protocol, batching, retry/backoff/bisection, `HttpTransport`, retention, consent, stats/logger, test harness | ≥ 90% line coverage of `core/` + `store/`; works on Android/iOS foreground only |
 | **v0.2** — Background ✅ (released 2026-10-18; iOS BGTasks still need a device test) | `spec/` conformance suite; Android WorkManager uploader; iOS exit-flush + BGTasks; `meta`-synced transport config; `bg_log` | Example app delivers events queued before process death (Android ✅ emulator) / backgrounding (iOS ✅ exit flush on Simulator; BGTasks need a device) without reopening |
-| **v0.3** — Hardening | Encryption, inspector widget, per-event rejects, gzip, docs site, pub.dev publish | Pub points 160; README with server dedupe guide and iOS caveats |
+| **v0.3** — Developer experience & hardening | `BeeSyncInspector` debug widget; `track()` throughput benchmark (and batched inserts if needed); iOS BGTask and Android real-device verification; pub.dev publish | Inspector usable in the example app; throughput numbers recorded; both background paths verified on real devices; pub points 160 |
+| **v0.4** — Auth & transport options (candidates) | Ingestion-key auth mode (no expiring tokens in background); background HTTP fallback for apps using a custom transport | Decided after v0.3 feedback |
 | **v1.0** | API freeze after real-app feedback | — |
+| **After 1.0** | Encryption at rest (§9): per-payload AES-256-GCM, Keystore/Keychain-wrapped key, covering stored auth headers | — |
 
 ---
 
@@ -396,7 +398,7 @@ Dependencies (kept minimal): `sqflite`, `path_provider`, `uuid`, `cryptography`,
 | Risk / question | Notes |
 |---|---|
 | Three implementations of the claim protocol drift | Mitigated by verbatim shared SQL + conformance fixtures run in CI on all three. |
-| Auth headers are stored in plaintext in `meta.transport_config` | Needed so the native uploader can authenticate. v0.3 encryption should cover this row too; until then prefer short-lived or ingestion-only keys. |
+| Auth headers are stored in plaintext in `meta.transport_config` | Needed so the native uploader can authenticate. Encryption (after 1.0) should cover this row too; until then prefer ingestion-only keys over user tokens. |
 | Old system SQLite on Android (API 23 = SQLite 3.8.10) | All shared SQL avoids UPSERT, RETURNING and window functions; see the header of `spec/schema.sql`. |
 | Auth tokens expire while app is backgrounded | Native stops on 401 and waits for `setHeaders()`. **Open:** offer an optional static "ingestion key" mode (common for analytics endpoints) to sidestep this entirely? |
 | sqflite throughput for high-volume `track()` | Channel round-trip per insert (~0.1–0.5 ms). Mitigation: micro-batch inserts in a single transaction every ~10 ms. Benchmark in v0.1. |

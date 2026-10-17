@@ -45,6 +45,12 @@ class InMemoryEventStore implements EventStore {
   }
 
   @override
+  Future<QueueTotals> insertAndCount(NewEvent event, {required int now}) async {
+    await insert(event);
+    return totals(now);
+  }
+
+  @override
   Future<List<StoredEvent>> claim({
     required String owner,
     required int now,
@@ -113,6 +119,30 @@ class InMemoryEventStore implements EventStore {
     inFlight: _rows.where((r) => r.isLeased(now)).length,
     bytes: _rows.fold(0, (sum, r) => sum + r.payload.length),
   );
+
+  @override
+  Future<List<QueuedEvent>> inspect({
+    required int now,
+    int limit = 200,
+  }) async => [
+    for (final r in _rows.take(limit))
+      QueuedEvent(
+        id: r.id,
+        name: r.name,
+        priority: r.priority,
+        createdAt: DateTime.fromMillisecondsSinceEpoch(
+          r.createdAt,
+          isUtc: true,
+        ),
+        attempts: r.attempts,
+        nextAttemptAt: r.nextAttemptAt > now
+            ? DateTime.fromMillisecondsSinceEpoch(r.nextAttemptAt, isUtc: true)
+            : null,
+        sizeBytes: r.payload.length,
+        inFlight: r.isLeased(now),
+        payload: r.payload,
+      ),
+  ];
 
   @override
   Future<List<String>> deleteExpired({

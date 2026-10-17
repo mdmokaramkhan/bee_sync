@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:collection';
 import 'dart:convert';
 import 'dart:io';
 import 'dart:math';
@@ -17,6 +18,7 @@ import '../platform/pigeon_background.dart';
 import '../platform/signals.dart';
 import '../store/event_store.dart';
 import '../store/sqflite_store.dart';
+import '../transport/event_transport.dart';
 import '../transport/http_transport.dart';
 import 'config.dart';
 import 'errors.dart';
@@ -132,6 +134,9 @@ class BeeSync implements FlushListener {
   late ConsentState _consent;
   DateTime? _lastSuccessAt;
   String? _lastError;
+  final _activity = ListQueue<ActivityEntry>();
+  static const _activityLimit = 50;
+  bool _simulateOffline = false;
 
   BeeLogger get _log => config.logger;
 
@@ -154,7 +159,7 @@ class BeeSync implements FlushListener {
   Future<void> _start() async {
     _flusher = FlushController(
       store: _store,
-      transport: config.transport,
+      transport: _SwitchableTransport(config.transport, () => _simulateOffline),
       settings: DeliverySettings.fromConfig(config),
       owner: _owner,
       random: _random,
@@ -302,7 +307,8 @@ class BeeSync implements FlushListener {
       }
     }
 
-    await _store.insert(
+    // One round trip: insert and count. Everything below uses this count.
+    final totals = await _store.insertAndCount(
       NewEvent(
         id: id,
         name: name,
@@ -310,16 +316,22 @@ class BeeSync implements FlushListener {
         priority: priority,
         createdAt: now,
       ),
+      now: now,
     );
     _log.log(LogLevel.trace, 'Tracked $name $id ${utf8.decode(payload)}');
 
-    if (retention.overflow == OverflowPolicy.dropOldest) {
+    var pending = totals.pending;
+    if (retention.overflow == OverflowPolicy.dropOldest &&
+        (totals.total > retention.maxEvents ||
+            totals.bytes > retention.maxBytes)) {
+      // Rare: only when the queue is over its limits.
       final evicted = await _store.evict(
         now: now,
         maxEvents: retention.maxEvents,
         maxBytes: retention.maxBytes,
       );
       if (evicted.isNotEmpty) {
+        pending -= evicted.length;
         await _recordDropped(evicted, DropReason.overflow);
       }
     }
@@ -329,7 +341,7 @@ class BeeSync implements FlushListener {
         _immediateTimer = null;
         _requestFlush(immediateOnly: true);
       });
-    } else if ((await _store.totals(now)).pending >= config.batching.flushAt) {
+    } else if (pending >= config.batching.flushAt) {
       _requestFlush();
     }
     _scheduleStats();
@@ -457,8 +469,7 @@ class BeeSync implements FlushListener {
     if (_closed) return;
     try {
       // The outage was probably why we were backing off; try again now.
-      await _store.resetBackoff();
-      await _store.setMeta(MetaKeys.flushNotBefore, '0');
+      await _resetBackoff();
     } catch (e, st) {
       _log.log(LogLevel.warn, 'Backoff reset failed', error: e, stackTrace: st);
     }
@@ -530,6 +541,81 @@ class BeeSync implements FlushListener {
     }
   }
 
+  /// Makes every queued event eligible for delivery now and clears the global
+  /// backoff (also the one set by a background run). Does not flush.
+  Future<void> resetBackoff() async {
+    if (!_ready.isCompleted) await _ready.future;
+    _checkOpen();
+    await _resetBackoff();
+    _scheduleStats();
+  }
+
+  Future<void> _resetBackoff() async {
+    await _store.resetBackoff();
+    await _store.setMeta(MetaKeys.flushNotBefore, '0');
+  }
+
+  /// Deletes every queued event, including ones a background upload may be
+  /// sending right now. Reported as [Dropped] with [DropReason.purged].
+  /// Returns how many were removed.
+  Future<int> purgeQueue() async {
+    if (!_ready.isCompleted) await _ready.future;
+    _checkOpen();
+    final ids = await _store.purge();
+    if (ids.isNotEmpty) await _recordDropped(ids, DropReason.purged);
+    return ids.length;
+  }
+
+  // ---- Diagnostics (used by BeeSyncInspector) ---------------------------------
+
+  /// Stored events, oldest first, read without claiming them.
+  Future<List<QueuedEvent>> debugQueue({int limit = 200}) async {
+    if (!_ready.isCompleted) await _ready.future;
+    _checkOpen();
+    return _store.inspect(
+      now: clock.now().millisecondsSinceEpoch,
+      limit: limit,
+    );
+  }
+
+  /// The last 50 requests and drops made by this app, newest first. Native
+  /// background runs are in [backgroundLog] instead.
+  List<ActivityEntry> get debugActivity => List.unmodifiable(_activity);
+
+  /// When true, this app's uploads fail as if offline (a retryable network
+  /// error), so backoff and retries can be watched without a real outage.
+  /// The native background uploader is not affected.
+  bool get debugSimulateOffline => _simulateOffline;
+
+  set debugSimulateOffline(bool value) {
+    _simulateOffline = value;
+    _log.log(LogLevel.info, 'Simulated offline: $value');
+    if (!value) _requestFlush();
+  }
+
+  void _recordActivity(ActivityEntry entry) {
+    _activity.addFirst(entry);
+    while (_activity.length > _activityLimit) {
+      _activity.removeLast();
+    }
+  }
+
+  static String _describe(TransportResult result, int events) =>
+      switch (result) {
+        Success(:final rejectedIds) when rejectedIds.isEmpty =>
+          '2xx: $events accepted',
+        Success(:final rejectedIds) =>
+          '2xx: ${events - rejectedIds.length} accepted, '
+              '${rejectedIds.length} rejected',
+        RetryableFailure(:final reason, :final retryAfter) =>
+          retryAfter == null
+              ? reason
+              : '$reason, retry after ${retryAfter.inSeconds}s',
+        AuthFailure(:final reason) => '$reason (auth refused)',
+        PayloadTooLarge() => 'HTTP 413 (too large)',
+        PermanentFailure(:final reason) => '$reason (refused)',
+      };
+
   // ---- Stats & notifications -----------------------------------------------
 
   /// Current queue snapshot. Counters include deliveries and drops made by
@@ -580,7 +666,26 @@ class BeeSync implements FlushListener {
   @override
   void onDropped(List<String> ids, DropReason reason) {
     _log.log(LogLevel.debug, 'Dropped ${ids.length} event(s): ${reason.name}');
+    _recordActivity(
+      DropActivity(clock.now(), events: ids.length, reason: reason),
+    );
     _emit(Dropped(List.unmodifiable(ids), reason));
+    _scheduleStats();
+  }
+
+  /// Called by the flush controller; not part of the public API.
+  @override
+  void onRequest(EventBatch batch, TransportResult result, Duration elapsed) {
+    _recordActivity(
+      RequestActivity(
+        clock.now(),
+        batchId: batch.batchId,
+        events: batch.events.length,
+        succeeded: result is Success,
+        outcome: _describe(result, batch.events.length),
+        elapsed: elapsed,
+      ),
+    );
     _scheduleStats();
   }
 
@@ -617,4 +722,18 @@ class BeeSync implements FlushListener {
   void _checkOpen() {
     if (_closed) throw StateError('BeeSync is closed');
   }
+}
+
+/// Lets `debugSimulateOffline` fail uploads without touching the real
+/// transport.
+class _SwitchableTransport implements EventTransport {
+  _SwitchableTransport(this._inner, this._offline);
+
+  final EventTransport _inner;
+  final bool Function() _offline;
+
+  @override
+  Future<TransportResult> send(EventBatch batch) async => _offline()
+      ? const RetryableFailure('Simulated offline')
+      : _inner.send(batch);
 }

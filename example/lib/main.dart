@@ -1,6 +1,7 @@
 import 'dart:async';
 
 import 'package:bee_sync/bee_sync.dart';
+import 'package:bee_sync/inspector.dart';
 import 'package:flutter/material.dart';
 
 /// Any endpoint that answers 2xx to a JSON POST works. httpbin echoes the
@@ -102,7 +103,16 @@ class _HomePageState extends State<HomePage> {
   Widget build(BuildContext context) {
     final s = _stats;
     return Scaffold(
-      appBar: AppBar(title: const Text('bee_sync')),
+      appBar: AppBar(
+        title: const Text('bee_sync'),
+        actions: [
+          IconButton(
+            tooltip: 'Inspector',
+            icon: const Icon(Icons.bug_report_outlined),
+            onPressed: () => BeeSyncInspector.show(context),
+          ),
+        ],
+      ),
       body: ListView(
         padding: const EdgeInsets.all(16),
         children: [

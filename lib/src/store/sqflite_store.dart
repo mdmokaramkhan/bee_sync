@@ -73,16 +73,29 @@ class SqfliteEventStore implements EventStore {
 
   @override
   Future<void> insert(NewEvent event) async {
-    await _database.rawInsert(sql.insertEvent, [
-      event.id,
-      event.name,
-      event.payload,
-      event.encrypted ? 1 : 0,
-      event.priority.code,
-      event.createdAt,
-      event.sizeBytes,
-    ]);
+    await _database.rawInsert(sql.insertEvent, _insertArgs(event));
   }
+
+  @override
+  Future<QueueTotals> insertAndCount(NewEvent event, {required int now}) async {
+    // Two plain calls, deliberately not a batch: sqflite's Batch.commit()
+    // wraps the batch in its own transaction (BEGIN, batch, COMMIT = three
+    // platform calls plus a Dart-side lock), which measured slower per
+    // track() than this. The count may include events inserted concurrently,
+    // which is fine for its uses (eviction check, flushAt trigger).
+    await _database.rawInsert(sql.insertEvent, _insertArgs(event));
+    return totals(now);
+  }
+
+  static List<Object?> _insertArgs(NewEvent event) => [
+    event.id,
+    event.name,
+    event.payload,
+    event.encrypted ? 1 : 0,
+    event.priority.code,
+    event.createdAt,
+    event.sizeBytes,
+  ];
 
   @override
   Future<List<StoredEvent>> claim({
@@ -159,6 +172,32 @@ class SqfliteEventStore implements EventStore {
       bytes: row['bytes']! as int,
     );
   }
+
+  @override
+  Future<List<QueuedEvent>> inspect({required int now, int limit = 200}) async {
+    final rows = await _database.rawQuery(sql.inspectEvents, [limit]);
+    return [
+      for (final r in rows)
+        QueuedEvent(
+          id: r['id']! as String,
+          name: r['name']! as String,
+          priority: Priority.fromCode(r['priority']! as int),
+          createdAt: DateTime.fromMillisecondsSinceEpoch(
+            r['created_at']! as int,
+            isUtc: true,
+          ),
+          attempts: r['attempts']! as int,
+          nextAttemptAt: _nextAttempt(r['next_attempt_at']! as int, now),
+          sizeBytes: r['size_bytes']! as int,
+          inFlight:
+              r['lease_owner'] != null && (r['lease_until']! as int) >= now,
+          payload: r['payload']! as Uint8List,
+        ),
+    ];
+  }
+
+  static DateTime? _nextAttempt(int at, int now) =>
+      at > now ? DateTime.fromMillisecondsSinceEpoch(at, isUtc: true) : null;
 
   @override
   Future<List<String>> deleteExpired({

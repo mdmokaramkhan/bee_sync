@@ -1,3 +1,5 @@
+import 'dart:convert';
+
 /// Delivery priority of an event.
 enum Priority {
   /// Batched; sent when a batch threshold, timer or lifecycle trigger fires.
@@ -51,6 +53,9 @@ enum DropReason {
 
   /// The stored payload could not be decoded.
   unreadable,
+
+  /// Removed by `BeeSync.purgeQueue()`.
+  purged,
 }
 
 /// One event inside an [EventBatch] handed to a transport.
@@ -125,6 +130,86 @@ class QueueStats {
   String toString() =>
       'QueueStats(pending: $pending, inFlight: $inFlight, sent: $sent, '
       'dropped: $droppedTotal, consent: ${consent.name})';
+}
+
+/// A stored event as shown by `BeeSync.debugQueue`, read without claiming it.
+class QueuedEvent {
+  const QueuedEvent({
+    required this.id,
+    required this.name,
+    required this.priority,
+    required this.createdAt,
+    required this.attempts,
+    required this.nextAttemptAt,
+    required this.sizeBytes,
+    required this.inFlight,
+    required this.payload,
+  });
+
+  final String id;
+  final String name;
+  final Priority priority;
+  final DateTime createdAt;
+
+  /// Failed delivery attempts so far.
+  final int attempts;
+
+  /// When the event may be sent again after a failure; null if it is ready.
+  final DateTime? nextAttemptAt;
+  final int sizeBytes;
+
+  /// Leased by an uploader (this app or the native background one) right now.
+  final bool inFlight;
+
+  /// The stored properties as UTF-8 JSON.
+  final List<int> payload;
+
+  /// The decoded properties, or null if the payload is not a JSON object.
+  Map<String, Object?>? get properties {
+    try {
+      final decoded = jsonDecode(utf8.decode(payload));
+      return decoded is Map<String, Object?> ? decoded : null;
+    } on FormatException {
+      return null;
+    }
+  }
+}
+
+/// One entry in `BeeSync.debugActivity`: what this app's uploader did.
+sealed class ActivityEntry {
+  const ActivityEntry(this.at);
+
+  final DateTime at;
+}
+
+/// A transport call.
+class RequestActivity extends ActivityEntry {
+  const RequestActivity(
+    super.at, {
+    required this.batchId,
+    required this.events,
+    required this.succeeded,
+    required this.outcome,
+    required this.elapsed,
+  });
+
+  final String batchId;
+  final int events;
+
+  /// The server accepted the batch (possibly rejecting some events).
+  final bool succeeded;
+
+  /// Human-readable result, e.g. `2xx: 20 accepted`, `HTTP 503, retry after 30s`.
+  final String outcome;
+  final Duration elapsed;
+}
+
+/// Events removed without delivery.
+class DropActivity extends ActivityEntry {
+  const DropActivity(super.at, {required this.events, required this.reason});
+
+  final int events;
+  final DropReason reason;
 }
 
 /// A line written by a native background uploader. See `BeeSync.backgroundLog`.

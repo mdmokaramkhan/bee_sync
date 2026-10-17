@@ -1,6 +1,6 @@
 # bee_sync — Design Document
 
-**Status:** Implemented through 0.2.0 · **Last updated:** 2026-10-18 · **Source:** `deep-research-report.md`
+**Status:** Implemented through 0.3.0 · **Last updated:** 2026-10-18 · **Source:** `deep-research-report.md`
 
 ---
 
@@ -336,7 +336,7 @@ The Dart and native serializers are checked against the same golden fixtures (`s
 - `events` stream: `Delivered(ids)`, `Dropped(ids, reason)`, `FlushFailed(error, nextRetryAt)`.
 - `BeeLogger` interface with levels; never logs payload contents above `trace`.
 - `backgroundLog()` reads `bg_log`, so apps can see what native did while Dart wasn't running.
-- Planned for v0.3: `BeeSyncInspector` debug widget (queue contents, last request/response, force flush, simulate offline).
+- `BeeSyncInspector` (v0.3, `package:bee_sync/inspector.dart`) has three tabs. **Status** shows counts, backoff, consent and background state. **Queue** reads stored events via `EventStore.inspect`, which claims nothing; properties are shown only on tap. **Activity** shows the last 50 `RequestActivity`/`DropActivity` entries and the native `bg_log`. Actions: flush, simulate offline (this app's transport only), reset backoff, purge.
 
 ---
 
@@ -386,7 +386,7 @@ Dependencies (kept minimal): `sqflite`, `path_provider`, `uuid`, `cryptography`,
 |---|---|---|
 | **v0.1** — Dart core ✅ | API, sqflite store, claim protocol, batching, retry/backoff/bisection, `HttpTransport`, retention, consent, stats/logger, test harness | ≥ 90% line coverage of `core/` + `store/`; works on Android/iOS foreground only |
 | **v0.2** — Background ✅ (released 2026-10-18; iOS BGTasks still need a device test) | `spec/` conformance suite; Android WorkManager uploader; iOS exit-flush + BGTasks; `meta`-synced transport config; `bg_log` | Example app delivers events queued before process death (Android ✅ emulator) / backgrounding (iOS ✅ exit flush on Simulator; BGTasks need a device) without reopening |
-| **v0.3** — Developer experience & hardening | `BeeSyncInspector` debug widget; `track()` throughput benchmark (and batched inserts if needed); iOS BGTask and Android real-device verification; pub.dev publish | Inspector usable in the example app; throughput numbers recorded; both background paths verified on real devices; pub points 160 |
+| **v0.3** — Developer experience & hardening (0.3.0 released 2026-10-18) | ✅ `BeeSyncInspector` debug widget; ✅ `track()` benchmark and the 5 → 1 store-call speed-up; ✅ pub.dev readiness (150/160 points, dry-run clean); ⏳ iOS BGTask and Android real-device verification; ⏳ first pub.dev publish | Inspector usable in the example app ✅; throughput numbers recorded ✅; both background paths verified on real devices ⏳ |
 | **v0.4** — Auth & transport options (candidates) | Ingestion-key auth mode (no expiring tokens in background); background HTTP fallback for apps using a custom transport | Decided after v0.3 feedback |
 | **v1.0** | API freeze after real-app feedback | — |
 | **After 1.0** | Encryption at rest (§9): per-payload AES-256-GCM, Keystore/Keychain-wrapped key, covering stored auth headers | — |

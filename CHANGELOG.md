@@ -1,3 +1,40 @@
+## 0.3.0 — 2026-10-18
+
+**Debugging tools and a faster `track()`.** A built-in inspector screen shows the queue, recent requests and the native background log. `track()` makes one store call instead of five, which makes it about 2× faster. First release intended for pub.dev.
+
+### Upgrading from 0.2.0
+* **`DropReason` has a new value, `purged`.** An exhaustive `switch` on `DropReason` needs a case for it.
+* **Custom `EventStore` implementations** must add `inspect({now, limit})` and `insertAndCount(event, now:)`.
+* No schema change: 0.2.0 databases are used as they are.
+
+### Added
+* **`BeeSyncInspector`**, a debug screen (`import 'package:bee_sync/inspector.dart'`, opened with `BeeSyncInspector.show(context)`):
+  * **Status:** queue, delivery and settings.
+  * **Queue:** stored events. Properties are shown only when you tap an event.
+  * **Activity:** this app's last 50 requests and drops, plus the native background log.
+
+  Actions: flush now, simulate offline, reset backoff, and purge (asks first). Keep it out of release builds.
+* `BeeSync.purgeQueue()`: deletes every queued event. The events are reported as `Dropped` with `DropReason.purged`.
+* `BeeSync.resetBackoff()`: clears the global backoff and makes deferred events ready again. Doesn't flush.
+* Diagnostics used by the inspector:
+  * `BeeSync.debugQueue({limit})`, which returns `QueuedEvent`s;
+  * `BeeSync.debugActivity`, which returns `RequestActivity` and `DropActivity` entries;
+  * `BeeSync.debugSimulateOffline`, which makes this app's uploads fail like a network error. The native background uploader isn't affected.
+* `EventStore.inspect({now, limit})`: lists stored events without claiming them.
+* `FakeTransport(latency: …)` simulates server response time.
+* `track()` throughput benchmark on host and on device (`benchmark/`), with old and new numbers.
+* Example app: an Inspector button in the app bar.
+
+### Changed
+* **`track()` is about 2× faster** (1.7–2.0× in the benchmarks on host, iOS Simulator and Android emulator). It now makes one store call, `EventStore.insertAndCount` (an insert plus a count for sqflite), instead of five. The eviction transaction only runs when the queue is over its limits. See `benchmark/README.md`.
+
+### Fixed
+* `BeeSyncTestHarness.close()` no longer hangs inside `testWidgets` or `fakeAsync`.
+
+### Known limitations
+* iOS BGTask delivery has still not been verified on a physical device (the upload when the app is backgrounded is verified on the Simulator).
+* Encryption at rest is planned after 1.0.
+
 ## 0.2.0 — 2026-10-18
 
 **Native background delivery.** With `HttpTransport`, events still queued when the app goes to the background are delivered by native code on Android and iOS, even after the app process is gone. No Flutter engine is started for it. Dart, Kotlin and Swift all follow one written contract and are tested against the same shared test cases.

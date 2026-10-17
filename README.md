@@ -4,18 +4,12 @@ Durable, offline-first event delivery for Flutter.
 
 Every event is written to an on-device SQLite queue **before** any network attempt, then delivered in batches (or right away, for high-priority events) with retries, backoff, consent controls and bounded storage. Delivery is **at-least-once**: each event carries a UUIDv7 `id`, and your server should dedupe on it.
 
-> **Status: 0.2.0.** Delivery while the app runs, plus native background delivery on Android (WorkManager) and iOS (upload when backgrounded, plus BGTaskScheduler). Encryption at rest is planned after 1.0. See [CHANGELOG.md](CHANGELOG.md) and [doc/DESIGN.md](doc/DESIGN.md).
+> **Status: 0.3.0.** Delivery while the app runs, native background delivery on Android (WorkManager) and iOS (upload when backgrounded, plus BGTaskScheduler), and a built-in debug inspector. Encryption at rest is planned after 1.0. See [CHANGELOG.md](CHANGELOG.md) and [doc/DESIGN.md](doc/DESIGN.md).
 
 ## Install
 
-bee_sync isn't on pub.dev yet. Depend on it from GitHub:
-
-```yaml
-dependencies:
-  bee_sync:
-    git:
-      url: https://github.com/mdmokaramkhan/bee_sync
-      ref: v0.2.0
+```bash
+flutter pub add bee_sync
 ```
 
 Requirements: Dart 3.10+ (Flutter 3.38+), Android API 24+, iOS 13+. iOS needs a few `Info.plist` entries for background delivery (see [Background delivery](#background-delivery)).
@@ -115,6 +109,23 @@ bee.events.listen((e) => switch (e) {
   FlushFailed(:final reason, :final retryAt) => …,
 });
 ```
+
+## Debugging
+
+`BeeSyncInspector` is a debug screen with three tabs:
+- **Status:** pending, in flight, sent and dropped counts, backoff, consent.
+- **Queue:** the stored events. Tap one to see its properties.
+- **Activity:** this app's recent requests with their results, plus the native background log.
+
+It can also flush now, simulate offline (this app's uploads fail so you can watch retries), reset backoff, and purge the queue.
+
+```dart
+import 'package:bee_sync/inspector.dart';
+
+if (kDebugMode) BeeSyncInspector.show(context);
+```
+
+Event properties can contain personal data, so keep the inspector out of release builds.
 
 ## Background delivery
 

@@ -1,5 +1,5 @@
 group = "dev.beesync.bee_sync"
-version = "0.2.0"
+version = "0.3.0"
 
 buildscript {
     ext.kotlin_version = "2.2.20"

@@ -78,6 +78,10 @@ class QueueTotals {
 /// All times are milliseconds since the Unix epoch and are passed in by the
 /// caller, so implementations never read a clock themselves.
 abstract interface class EventStore {
+  /// The SQLite file native background uploaders should open, or null when
+  /// this store is not shared with native code (no background delivery).
+  String? get databasePath;
+
   Future<void> open();
 
   Future<void> close();
@@ -94,8 +98,13 @@ abstract interface class EventStore {
     bool immediateOnly = false,
   });
 
-  /// Deletes events leased by [owner]: delivered, or dropped after failure.
-  Future<void> deleteLeased(String owner, Iterable<String> ids);
+  /// Deletes events leased by [owner] (delivered, or dropped after failure)
+  /// and, in the same transaction, adds [counters] to the counters table.
+  Future<void> deleteLeased(
+    String owner,
+    Iterable<String> ids, {
+    Map<String, int> counters = const {},
+  });
 
   /// Returns leased events to the queue, counting a failed attempt and
   /// deferring them until [nextAttemptAt].
@@ -133,4 +142,32 @@ abstract interface class EventStore {
   Future<String?> getMeta(String key);
 
   Future<void> setMeta(String key, String value);
+
+  Future<void> deleteMeta(String key);
+
+  /// Atomically adds each delta to its counter (see spec/uploader_contract.md
+  /// for the keys).
+  Future<void> incrementCounters(Map<String, int> deltas);
+
+  Future<Map<String, int>> counters();
+
+  /// Newest first.
+  Future<List<BackgroundLogEntry>> backgroundLog(int limit);
+}
+
+/// `meta` keys shared with the native uploaders
+/// (spec/uploader_contract.md §1).
+abstract final class MetaKeys {
+  static const consent = 'consent_state';
+  static const transportConfig = 'transport_config';
+  static const deliveryConfig = 'delivery_config';
+  static const flushNotBefore = 'flush_not_before';
+  static const authBlocked = 'auth_blocked';
+}
+
+/// Counter keys shared with the native uploaders.
+abstract final class CounterKeys {
+  static const sent = 'sent';
+
+  static String dropped(DropReason reason) => 'dropped.${reason.name}';
 }

@@ -127,6 +127,28 @@ class QueueStats {
       'dropped: $droppedTotal, consent: ${consent.name})';
 }
 
+/// A line written by a native background uploader. See `BeeSync.backgroundLog`.
+class BackgroundLogEntry {
+  const BackgroundLogEntry({
+    required this.at,
+    required this.source,
+    required this.level,
+    required this.message,
+  });
+
+  final DateTime at;
+
+  /// `android_worker`, `ios_bg_exit` or `ios_bgtask`.
+  final String source;
+
+  /// `debug`, `info`, `warn` or `error`.
+  final String level;
+  final String message;
+
+  @override
+  String toString() => '${at.toIso8601String()} [$source/$level] $message';
+}
+
 /// Notifications on `BeeSync.events`.
 sealed class DeliveryEvent {
   const DeliveryEvent();

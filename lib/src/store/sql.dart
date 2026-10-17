@@ -6,7 +6,7 @@
 /// runtime alone.
 library;
 
-const int schemaVersion = 1;
+const int schemaVersion = 2;
 
 // ---- Spec: schema.sql ------------------------------------------------------
 
@@ -44,6 +44,12 @@ CREATE TABLE bg_log (
   message TEXT NOT NULL
 )''';
 
+const String createCounters = '''
+CREATE TABLE counters (
+  key TEXT PRIMARY KEY,
+  value INTEGER NOT NULL DEFAULT 0
+)''';
+
 // ---- Spec: claim_protocol.sql ----------------------------------------------
 
 const String claim = '''
@@ -79,6 +85,25 @@ const String getMeta = 'SELECT value FROM meta WHERE key = ?';
 
 const String setMeta = 'INSERT OR REPLACE INTO meta (key, value) VALUES (?, ?)';
 
+const String countEvents = 'SELECT COUNT(*) FROM events';
+
+const String ensureCounter =
+    'INSERT OR IGNORE INTO counters (key, value) VALUES (?, 0)';
+
+const String incrementCounter =
+    'UPDATE counters SET value = value + ? WHERE key = ?';
+
+const String selectCounters = 'SELECT key, value FROM counters';
+
+const String insertBgLog =
+    'INSERT INTO bg_log (at, source, level, message) VALUES (?, ?, ?, ?)';
+
+const String trimBgLog =
+    'DELETE FROM bg_log WHERE seq <= (SELECT MAX(seq) FROM bg_log) - ?';
+
+const String selectBgLog =
+    'SELECT at, source, level, message FROM bg_log ORDER BY seq DESC LIMIT ?';
+
 // ---- Dart only -------------------------------------------------------------
 
 const String insertEvent = '''
@@ -109,6 +134,8 @@ const String deleteByIds = 'DELETE FROM events WHERE id IN ({ids})';
 const String selectAllIds = 'SELECT id FROM events';
 
 const String deleteAll = 'DELETE FROM events';
+
+const String deleteMeta = 'DELETE FROM meta WHERE key = ?';
 
 const String resetBackoff =
     'UPDATE events SET next_attempt_at = 0 WHERE next_attempt_at > 0';

@@ -1,0 +1,100 @@
+{
+  "description": "413 splits the batch; a single event that is still too large is dropped.",
+  "now": 1760000000000,
+  "events": [
+    {
+      "id": "a",
+      "name": "evt",
+      "properties": {
+        "k": "a"
+      },
+      "priority": "normal",
+      "created_at": 1759999940000,
+      "attempts": 0,
+      "next_attempt_at": 0,
+      "lease_owner": null,
+      "lease_until": null
+    },
+    {
+      "id": "b",
+      "name": "evt",
+      "properties": {
+        "k": "b"
+      },
+      "priority": "normal",
+      "created_at": 1759999940000,
+      "attempts": 0,
+      "next_attempt_at": 0,
+      "lease_owner": null,
+      "lease_until": null
+    },
+    {
+      "id": "c",
+      "name": "evt",
+      "properties": {
+        "k": "c"
+      },
+      "priority": "normal",
+      "created_at": 1759999940000,
+      "attempts": 0,
+      "next_attempt_at": 0,
+      "lease_owner": null,
+      "lease_until": null
+    }
+  ],
+  "responses": [
+    {
+      "status": 413,
+      "headers": {},
+      "body": ""
+    },
+    {
+      "status": 200,
+      "headers": {},
+      "body": ""
+    },
+    {
+      "status": 413,
+      "headers": {},
+      "body": ""
+    },
+    {
+      "status": 200,
+      "headers": {},
+      "body": ""
+    },
+    {
+      "status": 413,
+      "headers": {},
+      "body": ""
+    }
+  ],
+  "expect": {
+    "status": "drained",
+    "requests": [
+      [
+        "a",
+        "b",
+        "c"
+      ],
+      [
+        "a"
+      ],
+      [
+        "b",
+        "c"
+      ],
+      [
+        "b"
+      ],
+      [
+        "c"
+      ]
+    ],
+    "remaining": [],
+    "counters": {
+      "sent": 2,
+      "dropped.tooLarge": 1
+    }
+  }
+}

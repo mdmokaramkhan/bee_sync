@@ -1,0 +1,53 @@
+{
+  "description": "Rows whose payload is not a JSON object are dropped without being sent.",
+  "now": 1760000000000,
+  "events": [
+    {
+      "id": "x",
+      "name": "evt",
+      "properties": {
+        "k": "x"
+      },
+      "priority": "normal",
+      "created_at": 1759999940000,
+      "attempts": 0,
+      "next_attempt_at": 0,
+      "lease_owner": null,
+      "lease_until": null,
+      "payload_raw": "not json"
+    },
+    {
+      "id": "y",
+      "name": "evt",
+      "properties": {
+        "k": "y"
+      },
+      "priority": "normal",
+      "created_at": 1759999940000,
+      "attempts": 0,
+      "next_attempt_at": 0,
+      "lease_owner": null,
+      "lease_until": null
+    }
+  ],
+  "responses": [
+    {
+      "status": 200,
+      "headers": {},
+      "body": ""
+    }
+  ],
+  "expect": {
+    "status": "drained",
+    "requests": [
+      [
+        "y"
+      ]
+    ],
+    "remaining": [],
+    "counters": {
+      "sent": 1,
+      "dropped.unreadable": 1
+    }
+  }
+}

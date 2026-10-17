@@ -9,8 +9,11 @@ import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
 import 'package:uuid/uuid.dart';
 
+import '../core/delivery_settings.dart';
 import '../core/flush_controller.dart';
 import '../diagnostics/logger.dart';
+import '../platform/background.dart';
+import '../platform/pigeon_background.dart';
 import '../platform/signals.dart';
 import '../store/event_store.dart';
 import '../store/sqflite_store.dart';
@@ -19,7 +22,7 @@ import 'config.dart';
 import 'errors.dart';
 import 'models.dart';
 
-/// Durable event delivery. See docs/DESIGN.md.
+/// Durable event delivery. See doc/DESIGN.md.
 ///
 /// ```dart
 /// final bee = await BeeSync.initialize(BeeSyncConfig(
@@ -32,14 +35,22 @@ import 'models.dart';
 /// );
 /// ```
 class BeeSync implements FlushListener {
-  BeeSync._(this.config, this._store, this._signals, this._random)
-    : _owner = 'dart:${const Uuid().v4()}';
+  BeeSync._(
+    this.config,
+    this._store,
+    this._signals,
+    this._random,
+    this._background,
+  ) : _owner = 'dart:${const Uuid().v4()}';
 
   /// Opens the queue and starts automatic flushing.
   ///
-  /// [store], [signals] and [random] replace the defaults (SQLite in the
-  /// app-support directory, Flutter lifecycle + connectivity, a secure
-  /// random); they exist for tests and advanced setups.
+  /// [store], [signals], [random] and [background] replace the defaults
+  /// (SQLite in the app-support directory, Flutter lifecycle + connectivity,
+  /// a secure random, native background scheduling); they exist for tests and
+  /// advanced setups. Background delivery needs the native uploader to find
+  /// the database, so a custom [store] only gets it when it reports a
+  /// `databasePath` and a [background] scheduler is passed.
   ///
   /// `BeeSync.instance` is usable as soon as this is called: events tracked
   /// before initialization completes are written once the store is open.
@@ -48,6 +59,7 @@ class BeeSync implements FlushListener {
     EventStore? store,
     PlatformSignals? signals,
     Random? random,
+    BackgroundScheduler? background,
   }) async {
     if (_instance != null) {
       throw StateError('BeeSync is already initialized; call close() first');
@@ -57,6 +69,10 @@ class BeeSync implements FlushListener {
       store ?? SqfliteEventStore(path: await _defaultDatabasePath()),
       signals ?? FlutterPlatformSignals(),
       random ?? Random.secure(),
+      background ??
+          (store == null
+              ? PigeonBackgroundScheduler()
+              : const NoopBackgroundScheduler()),
     );
     _instance = bee;
     try {
@@ -93,6 +109,7 @@ class BeeSync implements FlushListener {
   final EventStore _store;
   final PlatformSignals _signals;
   final Random _random;
+  final BackgroundScheduler _background;
   final String _owner;
   static const _uuid = Uuid();
   static const _immediateDebounce = Duration(milliseconds: 50);
@@ -110,14 +127,11 @@ class BeeSync implements FlushListener {
   Future<FlushResult>? _runningFlush;
   bool _flushAgain = false;
   bool _closed = false;
+  bool _backgroundEnabled = false;
 
   late ConsentState _consent;
-  bool _authBlocked = false;
-  DateTime? _backoffUntil;
   DateTime? _lastSuccessAt;
   String? _lastError;
-  int _sent = 0;
-  final Map<DropReason, int> _dropped = {};
 
   BeeLogger get _log => config.logger;
 
@@ -125,9 +139,15 @@ class BeeSync implements FlushListener {
   Stream<QueueStats> get stats => _statsController.stream;
 
   /// Delivery, drop and failure notifications.
+  ///
+  /// Covers this process only; deliveries made by the native background
+  /// uploader show up in [getStats] counters and [backgroundLog].
   Stream<DeliveryEvent> get events => _eventsController.stream;
 
   ConsentState get consent => _consent;
+
+  /// Whether native background delivery is active.
+  bool get backgroundEnabled => _backgroundEnabled;
 
   // ---- Lifecycle -----------------------------------------------------------
 
@@ -135,64 +155,87 @@ class BeeSync implements FlushListener {
     _flusher = FlushController(
       store: _store,
       transport: config.transport,
-      config: config,
+      settings: DeliverySettings.fromConfig(config),
       owner: _owner,
       random: _random,
       listener: this,
+      logger: config.logger,
     );
     await _store.open();
-    await _loadMeta();
+    await _loadConsent();
     await _persistTransportConfig();
+    await _store.setMeta(
+      MetaKeys.deliveryConfig,
+      jsonEncode(DeliverySettings.fromConfig(config).toJson()),
+    );
     await _enforceRetention();
+    await _configureBackground();
 
     _subscriptions
-      ..add(_signals.appBackgrounded.listen((_) => _requestFlush()))
+      ..add(_signals.appBackgrounded.listen((_) => _onBackgrounded()))
       ..add(_signals.connectivityRestored.listen((_) => _onConnectivity()));
     _intervalTimer = Timer.periodic(
       config.batching.flushInterval,
       (_) => _onInterval(),
     );
     _ready.complete();
-    _log.log(LogLevel.info, 'bee_sync started (consent: ${_consent.name})');
+    _log.log(
+      LogLevel.info,
+      'bee_sync started (consent: ${_consent.name}, '
+      'background: $_backgroundEnabled)',
+    );
     _requestFlush();
     _scheduleStats();
   }
 
-  Future<void> _loadMeta() async {
-    final consent = await _store.getMeta(_MetaKeys.consent);
+  Future<void> _loadConsent() async {
+    final consent = await _store.getMeta(MetaKeys.consent);
     _consent = ConsentState.values.firstWhere(
       (c) => c.name == consent,
       orElse: () => config.consent.initial,
     );
     if (consent == null) {
-      await _store.setMeta(_MetaKeys.consent, _consent.name);
+      await _store.setMeta(MetaKeys.consent, _consent.name);
     }
+  }
 
-    final backoff = int.tryParse(
-      await _store.getMeta(_MetaKeys.flushNotBefore) ?? '',
-    );
-    if (backoff != null && backoff > clock.now().millisecondsSinceEpoch) {
-      _backoffUntil = DateTime.fromMillisecondsSinceEpoch(backoff);
+  Future<void> _configureBackground() async {
+    final path = _store.databasePath;
+    final wanted = config.background.enabled;
+    final httpTransport = config.transport is HttpTransport;
+    if (wanted && !httpTransport) {
+      _log.log(
+        LogLevel.warn,
+        'Background delivery needs HttpTransport; it is off for '
+        '${config.transport.runtimeType}.',
+      );
     }
-
-    final counters = await _store.getMeta(_MetaKeys.counters);
-    if (counters != null) {
-      try {
-        final json = jsonDecode(counters) as Map<String, Object?>;
-        _sent = json['sent'] as int? ?? 0;
-        final dropped = json['dropped'] as Map<String, Object?>? ?? const {};
-        for (final reason in DropReason.values) {
-          final n = dropped[reason.name];
-          if (n is int && n > 0) _dropped[reason] = n;
-        }
-      } on Object catch (e) {
-        _log.log(LogLevel.warn, 'Ignoring corrupt counters', error: e);
+    _backgroundEnabled = wanted && httpTransport && path != null;
+    try {
+      final warnings = await _background.configure(
+        databasePath: path ?? '',
+        enabled: _backgroundEnabled,
+      );
+      for (final w in warnings) {
+        _log.log(LogLevel.warn, w);
       }
+      if (!_backgroundEnabled) await _background.cancel();
+    } catch (e, st) {
+      // A missing native side (e.g. unit tests, unsupported platform) must not
+      // stop foreground delivery.
+      _backgroundEnabled = false;
+      _log.log(
+        LogLevel.warn,
+        'Background delivery unavailable',
+        error: e,
+        stackTrace: st,
+      );
     }
   }
 
   /// Stops flushing, waits for an in-progress flush and closes the store.
-  /// Undelivered events stay on disk for the next launch.
+  /// Undelivered events stay on disk for the next launch (and for the native
+  /// background uploader).
   Future<void> close() async {
     if (_closed) return;
     _closed = true;
@@ -204,7 +247,6 @@ class BeeSync implements FlushListener {
     }
     _signals.dispose();
     await _runningFlush;
-    await _persistCounters();
     await _store.close();
     await _statsController.close();
     await _eventsController.close();
@@ -245,7 +287,7 @@ class BeeSync implements FlushListener {
 
     final id = _uuid.v7();
     if (!_acceptsNewEvents) {
-      onDropped([id], DropReason.noConsent);
+      await _recordDropped([id], DropReason.noConsent);
       return id;
     }
 
@@ -255,7 +297,7 @@ class BeeSync implements FlushListener {
       final t = await _store.totals(now);
       if (t.total + 1 > retention.maxEvents ||
           t.bytes + payload.length > retention.maxBytes) {
-        onDropped([id], DropReason.overflow);
+        await _recordDropped([id], DropReason.overflow);
         return id;
       }
     }
@@ -277,7 +319,9 @@ class BeeSync implements FlushListener {
         maxEvents: retention.maxEvents,
         maxBytes: retention.maxBytes,
       );
-      if (evicted.isNotEmpty) onDropped(evicted, DropReason.overflow);
+      if (evicted.isNotEmpty) {
+        await _recordDropped(evicted, DropReason.overflow);
+      }
     }
 
     if (priority == Priority.immediate) {
@@ -342,36 +386,19 @@ class BeeSync implements FlushListener {
     required bool manual,
     required bool immediateOnly,
   }) async {
-    if (_consent != ConsentState.granted) {
-      return const FlushResult(FlushStatus.skipped, error: 'consent');
-    }
-    if (!manual) {
-      if (_authBlocked) {
-        return const FlushResult(FlushStatus.skipped, error: 'auth');
-      }
-      final backoff = _backoffUntil;
-      if (backoff != null && clock.now().isBefore(backoff)) {
-        return FlushResult(FlushStatus.skipped, retryAt: backoff);
-      }
-    }
-
     try {
       final result = await _flusher.run(
+        manual: manual,
         immediateOnly: immediateOnly,
         shouldContinue: () => !_closed && _consent == ConsentState.granted,
       );
       if (result.delivered > 0) _lastSuccessAt = clock.now();
       switch (result.status) {
-        case FlushStatus.drained:
-          _authBlocked = false;
-          if (_backoffUntil != null) await _setBackoff(null);
         case FlushStatus.backingOff:
-          await _setBackoff(result.retryAt);
           _reportFailure(result.error ?? 'retryable failure', result.retryAt);
         case FlushStatus.authBlocked:
-          _authBlocked = true;
           _reportFailure(result.error ?? 'auth failure', null);
-        case FlushStatus.skipped:
+        case FlushStatus.drained || FlushStatus.skipped:
           break;
       }
       return result;
@@ -390,12 +417,25 @@ class BeeSync implements FlushListener {
     _emit(FlushFailed(reason, retryAt: retryAt));
   }
 
-  Future<void> _setBackoff(DateTime? until) async {
-    _backoffUntil = until;
-    await _store.setMeta(
-      _MetaKeys.flushNotBefore,
-      '${until?.millisecondsSinceEpoch ?? 0}',
-    );
+  Future<void> _onBackgrounded() async {
+    if (_closed) return;
+    await _flush();
+    if (!_backgroundEnabled || _closed) return;
+    try {
+      final remaining = await _store.totals(clock.now().millisecondsSinceEpoch);
+      if (remaining.total > 0) {
+        await _background.schedule();
+      } else {
+        await _background.cancel();
+      }
+    } catch (e, st) {
+      _log.log(
+        LogLevel.warn,
+        'Background scheduling failed',
+        error: e,
+        stackTrace: st,
+      );
+    }
   }
 
   Future<void> _onInterval() async {
@@ -418,7 +458,7 @@ class BeeSync implements FlushListener {
     try {
       // The outage was probably why we were backing off; try again now.
       await _store.resetBackoff();
-      await _setBackoff(null);
+      await _store.setMeta(MetaKeys.flushNotBefore, '0');
     } catch (e, st) {
       _log.log(LogLevel.warn, 'Backoff reset failed', error: e, stackTrace: st);
     }
@@ -431,20 +471,20 @@ class BeeSync implements FlushListener {
       createdBefore: now - config.retention.maxAge.inMilliseconds,
       now: now,
     );
-    if (expired.isNotEmpty) onDropped(expired, DropReason.expired);
+    if (expired.isNotEmpty) await _recordDropped(expired, DropReason.expired);
     final evicted = await _store.evict(
       now: now,
       maxEvents: config.retention.maxEvents,
       maxBytes: config.retention.maxBytes,
     );
-    if (evicted.isNotEmpty) onDropped(evicted, DropReason.overflow);
+    if (evicted.isNotEmpty) await _recordDropped(evicted, DropReason.overflow);
   }
 
   // ---- Settings ------------------------------------------------------------
 
   /// Replaces the [HttpTransport] headers (e.g. a refreshed auth token),
   /// persists them for background delivery, and resumes flushing if it was
-  /// paused by an auth failure.
+  /// paused by an auth failure (here or in the background).
   Future<void> setHeaders(Map<String, String> headers) async {
     if (!_ready.isCompleted) await _ready.future;
     _checkOpen();
@@ -454,11 +494,11 @@ class BeeSync implements FlushListener {
     }
     transport.headers = headers;
     await _persistTransportConfig();
-    _authBlocked = false;
+    await _store.setMeta(MetaKeys.authBlocked, '0');
     _requestFlush();
   }
 
-  /// Updates and persists consent.
+  /// Updates and persists consent; the background uploader honours it too.
   ///
   /// [ConsentState.denied] stops capture and delivery; with [purge] it also
   /// deletes queued events. [ConsentState.granted] releases held events.
@@ -466,50 +506,72 @@ class BeeSync implements FlushListener {
     if (!_ready.isCompleted) await _ready.future;
     _checkOpen();
     _consent = state;
-    await _store.setMeta(_MetaKeys.consent, state.name);
+    await _store.setMeta(MetaKeys.consent, state.name);
     if (purge) {
       final ids = await _store.purge();
-      if (ids.isNotEmpty) onDropped(ids, DropReason.noConsent);
+      if (ids.isNotEmpty) await _recordDropped(ids, DropReason.noConsent);
     }
     _log.log(LogLevel.info, 'Consent set to ${state.name}');
     if (state == ConsentState.granted) _requestFlush();
     _scheduleStats();
   }
 
+  /// Mirrors [HttpTransport] settings for the native uploader. With any other
+  /// transport the key is removed, which tells native not to upload.
   Future<void> _persistTransportConfig() async {
     final transport = config.transport;
     if (transport is HttpTransport) {
       await _store.setMeta(
-        _MetaKeys.transportConfig,
+        MetaKeys.transportConfig,
         jsonEncode(transport.toConfigJson()),
       );
+    } else {
+      await _store.deleteMeta(MetaKeys.transportConfig);
     }
   }
 
   // ---- Stats & notifications -----------------------------------------------
 
-  /// Current queue snapshot.
+  /// Current queue snapshot. Counters include deliveries and drops made by
+  /// the native background uploader.
   Future<QueueStats> getStats() async {
     if (!_ready.isCompleted) await _ready.future;
     _checkOpen();
-    final t = await _store.totals(clock.now().millisecondsSinceEpoch);
+    final now = clock.now();
+    final t = await _store.totals(now.millisecondsSinceEpoch);
+    final counters = await _store.counters();
+    final notBefore =
+        int.tryParse(await _store.getMeta(MetaKeys.flushNotBefore) ?? '') ?? 0;
     return QueueStats(
       pending: t.pending,
       inFlight: t.inFlight,
       queuedBytes: t.bytes,
-      sent: _sent,
-      dropped: Map.unmodifiable(_dropped),
+      sent: counters[CounterKeys.sent] ?? 0,
+      dropped: Map.unmodifiable({
+        for (final reason in DropReason.values)
+          if ((counters[CounterKeys.dropped(reason)] ?? 0) > 0)
+            reason: counters[CounterKeys.dropped(reason)]!,
+      }),
       consent: _consent,
       lastSuccessAt: _lastSuccessAt,
       lastError: _lastError,
-      backoffUntil: _backoffUntil,
+      backoffUntil: notBefore > now.millisecondsSinceEpoch
+          ? DateTime.fromMillisecondsSinceEpoch(notBefore)
+          : null,
     );
+  }
+
+  /// What the native background uploader did while the app was not running,
+  /// newest first.
+  Future<List<BackgroundLogEntry>> backgroundLog({int limit = 50}) async {
+    if (!_ready.isCompleted) await _ready.future;
+    _checkOpen();
+    return _store.backgroundLog(limit);
   }
 
   /// Called by the flush controller; not part of the public API.
   @override
   void onDelivered(List<String> ids) {
-    _sent += ids.length;
     _emit(Delivered(List.unmodifiable(ids)));
     _scheduleStats();
   }
@@ -517,10 +579,16 @@ class BeeSync implements FlushListener {
   /// Called by the flush controller; not part of the public API.
   @override
   void onDropped(List<String> ids, DropReason reason) {
-    _dropped[reason] = (_dropped[reason] ?? 0) + ids.length;
     _log.log(LogLevel.debug, 'Dropped ${ids.length} event(s): ${reason.name}');
     _emit(Dropped(List.unmodifiable(ids), reason));
     _scheduleStats();
+  }
+
+  /// Drops decided here (consent, retention), as opposed to by an uploader,
+  /// which counts its own drops.
+  Future<void> _recordDropped(List<String> ids, DropReason reason) async {
+    await _store.incrementCounters({CounterKeys.dropped(reason): ids.length});
+    onDropped(ids, reason);
   }
 
   void _emit(DeliveryEvent event) {
@@ -533,7 +601,6 @@ class BeeSync implements FlushListener {
       _statsTimer = null;
       if (_closed) return;
       try {
-        await _persistCounters();
         final s = await getStats();
         if (!_statsController.isClosed) _statsController.add(s);
       } catch (e, st) {
@@ -547,23 +614,7 @@ class BeeSync implements FlushListener {
     });
   }
 
-  Future<void> _persistCounters() => _store.setMeta(
-    _MetaKeys.counters,
-    jsonEncode({
-      'sent': _sent,
-      'dropped': {for (final e in _dropped.entries) e.key.name: e.value},
-    }),
-  );
-
   void _checkOpen() {
     if (_closed) throw StateError('BeeSync is closed');
   }
-}
-
-/// Keys in the `meta` table. Shared with the native uploaders.
-abstract final class _MetaKeys {
-  static const consent = 'consent_state';
-  static const flushNotBefore = 'flush_not_before';
-  static const counters = 'counters';
-  static const transportConfig = 'transport_config';
 }

@@ -1,0 +1,62 @@
+{
+  "description": "Batches are trimmed to max_batch_bytes (each payload here is 28 bytes).",
+  "now": 1760000000000,
+  "delivery_config": {
+    "max_batch_bytes": 30
+  },
+  "events": [
+    {
+      "id": "a",
+      "name": "evt",
+      "properties": {
+        "p": "xxxxxxxxxxxxxxxxxxxx"
+      },
+      "priority": "normal",
+      "created_at": 1759999940000,
+      "attempts": 0,
+      "next_attempt_at": 0,
+      "lease_owner": null,
+      "lease_until": null
+    },
+    {
+      "id": "b",
+      "name": "evt",
+      "properties": {
+        "p": "xxxxxxxxxxxxxxxxxxxx"
+      },
+      "priority": "normal",
+      "created_at": 1759999940000,
+      "attempts": 0,
+      "next_attempt_at": 0,
+      "lease_owner": null,
+      "lease_until": null
+    }
+  ],
+  "responses": [
+    {
+      "status": 200,
+      "headers": {},
+      "body": ""
+    },
+    {
+      "status": 200,
+      "headers": {},
+      "body": ""
+    }
+  ],
+  "expect": {
+    "status": "drained",
+    "requests": [
+      [
+        "a"
+      ],
+      [
+        "b"
+      ]
+    ],
+    "remaining": [],
+    "counters": {
+      "sent": 2
+    }
+  }
+}

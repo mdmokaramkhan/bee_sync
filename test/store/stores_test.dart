@@ -3,6 +3,7 @@ import 'dart:io';
 import 'dart:typed_data';
 
 import 'package:bee_sync/bee_sync.dart';
+import 'package:bee_sync/src/store/sql.dart' as sql;
 import 'package:bee_sync/src/store/sqflite_store.dart';
 import 'package:bee_sync/testing.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -64,8 +65,79 @@ void main() {
       final db = await databaseFactoryFfiNoIsolate.openDatabase(path);
       final mode = await db.rawQuery('PRAGMA journal_mode');
       expect(mode.single.values.single, 'wal');
-      expect(await db.getVersion(), 1);
+      expect(await db.getVersion(), 2);
       await db.close();
+    });
+
+    test('migrates a v1 database, carrying counters over', () async {
+      final v1 = await databaseFactoryFfiNoIsolate.openDatabase(
+        path,
+        options: OpenDatabaseOptions(
+          version: 1,
+          onCreate: (db, _) async {
+            for (final stmt in [
+              sql.createEvents,
+              sql.createEventsReadyIndex,
+              sql.createMeta,
+              sql.createBgLog,
+            ]) {
+              await db.execute(stmt);
+            }
+            await db.rawInsert(sql.setMeta, [
+              'counters',
+              '{"sent": 7, "dropped": {"overflow": 2}}',
+            ]);
+          },
+        ),
+      );
+      await v1.close();
+
+      final store = SqfliteEventStore(
+        path: path,
+        factory: databaseFactoryFfiNoIsolate,
+      );
+      await store.open();
+      expect(await store.counters(), {'sent': 7, 'dropped.overflow': 2});
+      expect(await store.getMeta('counters'), isNull);
+      await store.close();
+    });
+
+    test('reads the background log written by native code', () async {
+      final store = SqfliteEventStore(
+        path: path,
+        factory: databaseFactoryFfiNoIsolate,
+      );
+      await store.open();
+      final native = await databaseFactoryFfiNoIsolate.openDatabase(
+        path,
+        options: OpenDatabaseOptions(singleInstance: false),
+      );
+      await native.rawInsert(sql.insertBgLog, [
+        1000,
+        'android_worker',
+        'info',
+        'one',
+      ]);
+      await native.rawInsert(sql.insertBgLog, [
+        2000,
+        'android_worker',
+        'warn',
+        'two',
+      ]);
+      await native.rawInsert(sql.insertBgLog, [
+        3000,
+        'ios_bgtask',
+        'info',
+        'three',
+      ]);
+      await native.rawDelete(sql.trimBgLog, [2]);
+      await native.close();
+
+      final log = await store.backgroundLog(10);
+      expect([for (final e in log) e.message], ['three', 'two']);
+      expect(log.first.source, 'ios_bgtask');
+      expect(log.first.at.millisecondsSinceEpoch, 3000);
+      await store.close();
     });
 
     test('refuses a database from a newer schema version', () async {

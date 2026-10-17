@@ -1,4 +1,4 @@
--- bee_sync claim protocol. See docs/DESIGN.md §5.
+-- bee_sync claim protocol. See doc/DESIGN.md §5.
 --
 -- Every uploader (Dart foreground, Android worker, iOS background task) moves
 -- events through: claim -> send -> delete_leased | release_retry | release.
@@ -54,3 +54,33 @@ SELECT value FROM meta WHERE key = ?;
 -- name: set_meta
 -- params: key, value
 INSERT OR REPLACE INTO meta (key, value) VALUES (?, ?);
+
+-- name: count_events
+-- Used by native schedulers to decide whether to keep background work queued.
+SELECT COUNT(*) FROM events;
+
+-- name: ensure_counter
+-- params: key
+INSERT OR IGNORE INTO counters (key, value) VALUES (?, 0);
+
+-- name: increment_counter
+-- params: delta, key  (run ensure_counter first, in the same transaction)
+UPDATE counters SET value = value + ? WHERE key = ?;
+
+-- name: select_counters
+SELECT key, value FROM counters;
+
+-- name: insert_bg_log
+-- params: at, source, level, message
+-- Native only. source: "android_worker" | "ios_bg_exit" | "ios_bgtask";
+-- level: "debug" | "info" | "warn" | "error".
+INSERT INTO bg_log (at, source, level, message) VALUES (?, ?, ?, ?);
+
+-- name: trim_bg_log
+-- params: keep  (200)
+-- Native only, after each run.
+DELETE FROM bg_log WHERE seq <= (SELECT MAX(seq) FROM bg_log) - ?;
+
+-- name: select_bg_log
+-- params: limit
+SELECT at, source, level, message FROM bg_log ORDER BY seq DESC LIMIT ?;

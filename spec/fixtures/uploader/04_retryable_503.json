@@ -1,0 +1,51 @@
+{
+  "description": "5xx counts an attempt and backs off within [cap/2, cap].",
+  "now": 1760000000000,
+  "events": [
+    {
+      "id": "a",
+      "name": "evt",
+      "properties": {
+        "k": "a"
+      },
+      "priority": "normal",
+      "created_at": 1759999940000,
+      "attempts": 0,
+      "next_attempt_at": 0,
+      "lease_owner": null,
+      "lease_until": null
+    }
+  ],
+  "responses": [
+    {
+      "status": 503,
+      "headers": {},
+      "body": ""
+    }
+  ],
+  "expect": {
+    "status": "backingOff",
+    "requests": [
+      [
+        "a"
+      ]
+    ],
+    "remaining": [
+      {
+        "id": "a",
+        "attempts": 1,
+        "next_attempt_at": {
+          "min": 1760000001000,
+          "max": 1760000002000
+        }
+      }
+    ],
+    "counters": {},
+    "meta": {
+      "flush_not_before": {
+        "min": 1760000001000,
+        "max": 1760000002000
+      }
+    }
+  }
+}

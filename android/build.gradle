@@ -1,5 +1,5 @@
 group = "dev.beesync.bee_sync"
-version = "1.0-SNAPSHOT"
+version = "0.2.0"
 
 buildscript {
     ext.kotlin_version = "2.2.20"
@@ -48,13 +48,24 @@ android {
     }
 
     dependencies {
-        testImplementation("org.jetbrains.kotlin:kotlin-test")
-        testImplementation("org.mockito:mockito-core:5.0.0")
+        implementation("androidx.work:work-runtime:2.10.0")
+
+        testImplementation("junit:junit:4.13.2")
+        testImplementation("org.jetbrains.kotlin:kotlin-test-junit")
+        testImplementation("org.robolectric:robolectric:4.14.1")
+        testImplementation("androidx.test:core:1.6.1")
+        testImplementation("androidx.work:work-testing:2.10.0")
+        testImplementation("com.squareup.okhttp3:mockwebserver:4.12.0")
     }
 
     testOptions {
+        unitTests.includeAndroidResources = true
         unitTests.all {
-            useJUnitPlatform()
+            // Tests read the shared spec/ files relative to the plugin root.
+            systemProperty "beesync.specDir", file("../spec").absolutePath
+            // The JDK's HttpURLConnection silently re-sends a POST once after a
+            // dropped connection; turn that off so fixtures see one request.
+            systemProperty "sun.net.http.retryPost", "false"
 
             testLogging {
                events "passed", "skipped", "failed", "standardOut", "standardError"

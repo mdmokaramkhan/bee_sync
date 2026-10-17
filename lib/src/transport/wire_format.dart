@@ -1,7 +1,7 @@
 import '../api/models.dart';
 
 /// JSON body sent by `HttpTransport` and, in v0.2, by the native uploaders.
-/// See docs/DESIGN.md §10.
+/// See doc/DESIGN.md §10.
 Map<String, Object?> encodeBatch(
   EventBatch batch, {
   required DateTime sentAt,

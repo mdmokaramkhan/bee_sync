@@ -1,0 +1,47 @@
+{
+  "description": "A manual run ignores backoff and auth_blocked, and clears both when it drains.",
+  "now": 1760000000000,
+  "manual": true,
+  "meta": {
+    "auth_blocked": "1",
+    "flush_not_before": "1760000005000"
+  },
+  "events": [
+    {
+      "id": "a",
+      "name": "evt",
+      "properties": {
+        "k": "a"
+      },
+      "priority": "normal",
+      "created_at": 1759999940000,
+      "attempts": 0,
+      "next_attempt_at": 0,
+      "lease_owner": null,
+      "lease_until": null
+    }
+  ],
+  "responses": [
+    {
+      "status": 200,
+      "headers": {},
+      "body": ""
+    }
+  ],
+  "expect": {
+    "status": "drained",
+    "requests": [
+      [
+        "a"
+      ]
+    ],
+    "remaining": [],
+    "counters": {
+      "sent": 1
+    },
+    "meta": {
+      "auth_blocked": "0",
+      "flush_not_before": 0
+    }
+  }
+}

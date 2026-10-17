@@ -1,6 +1,6 @@
 # bee_sync — Design Document
 
-**Status:** Draft v0.1 · **Date:** 2026-10-17 · **Source:** `deep-research-report.md`
+**Status:** Implemented through 0.2.0 · **Last updated:** 2026-10-18 · **Source:** `deep-research-report.md`
 
 ---
 
@@ -54,7 +54,7 @@ Delivery guarantee: **at-least-once**. Every event carries a client-generated UU
 └──────────────────────────────────────────────────────────────────────────────┘
 ```
 
-Two independent uploaders (Dart and native) operate on **one SQLite file**. Correctness comes from a shared schema and a lease-based claim protocol (§5), not from coordination messages.
+Two independent uploaders (Dart and native) operate on **one SQLite file**. Correctness comes from a shared schema and a lease-based claim protocol (§5), not from coordination messages. All shared state (consent, global backoff, auth block, settings, counters) lives in the database, so whichever uploader runs next sees it. The step-by-step algorithm every uploader follows is in [`spec/uploader_contract.md`](../spec/uploader_contract.md).
 
 ### 2.1 Key decisions
 
@@ -146,7 +146,7 @@ class PermanentFailure extends TransportResult { final String reason; }
 
 ## 4. Data model
 
-Single file: `<app support dir>/bee_sync/bee_sync.db`. Schema version tracked in `PRAGMA user_version`. Both runtimes refuse to operate on a version newer than they understand (logged, no crash).
+Single file: `<app support dir>/bee_sync/bee_sync.db`. Schema version tracked in `PRAGMA user_version` (currently 2). Only Dart creates or migrates the file; Dart refuses a newer version than it knows, and native uploaders run only on exactly the version they were built for (otherwise they wait for the app's next launch to migrate).
 
 ```sql
 CREATE TABLE events (
@@ -166,8 +166,12 @@ CREATE TABLE events (
 CREATE INDEX events_ready ON events (lease_owner, priority DESC, seq);
 
 CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
--- keys: transport_config (JSON), consent_state, flush_not_before (global backoff),
---       counters (JSON: sent, dropped_by_reason), wrapped_data_key
+-- keys: consent_state, transport_config (JSON), delivery_config (JSON),
+--       flush_not_before (global backoff), auth_blocked; v0.3: wrapped_data_key
+-- See spec/uploader_contract.md §1 for formats and who writes each key.
+
+CREATE TABLE counters (key TEXT PRIMARY KEY, value INTEGER NOT NULL DEFAULT 0);
+-- schema v2: "sent", "dropped.<reason>"; incremented atomically by every uploader
 
 CREATE TABLE bg_log (                               -- ring buffer, capped at 200 rows
   seq INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -238,25 +242,33 @@ An auth failure pauses automatic flushes in the foreground too; `setHeaders()` o
 
 ### 7.1 Android
 
-- On app background (and after any failed foreground flush) with a non-empty queue: enqueue unique **OneTimeWorkRequest** `bee_sync_flush`, constraint `NetworkType.CONNECTED`, policy `KEEP`, exponential backoff.
-- While the queue is non-empty, keep a unique **PeriodicWorkRequest** (15 min, the OS minimum) as a safety net; cancel it when the queue drains.
-- Worker = `CoroutineWorker` running `NativeUploader` with `HttpURLConnection` (no OkHttp dependency).
-- Runs in the app process. Same SQLite library as sqflite → lock-safe.
-- `minSdk 23` (Keystore AES-GCM). No manifest changes required from users.
+Implemented in `android/src/main/kotlin/dev/beesync/bee_sync/`.
+
+- When the app goes to the background with a non-empty queue, Dart calls `scheduleBackgroundFlush()`, which enqueues:
+  - unique **OneTimeWorkRequest** `bee_sync_flush` (`NetworkType.CONNECTED`, policy `KEEP`);
+  - unique **PeriodicWorkRequest** `bee_sync_periodic` (15 min, the OS minimum) as a safety net while the queue is non-empty. The worker cancels it once the queue drains.
+- When a run backs off, or is skipped because a backoff is still active (often the app's own failed flush moments earlier), the worker enqueues `bee_sync_retry` (policy `REPLACE`), delayed until `flush_not_before`. WorkManager's own retry/backoff is not used: the worker always returns success.
+- `FlushWorker` (a plain `Worker`) runs `NativeUploader` over `HttpURLConnection` (no OkHttp dependency). There is no Flutter engine: Android starts the process just for the job service, and the uploader reads the database path that `configure()` saved in SharedPreferences.
+- The database is opened with `ENABLE_WRITE_AHEAD_LOGGING` (otherwise Android would switch the file out of WAL on open) and `NO_LOCALIZED_COLLATORS`.
+- `minSdk 24` (the Flutter default). The plugin declares `INTERNET`; no other manifest changes are needed.
+- **Force-stop** (Settings → Force stop, or `adb shell am force-stop`) cancels all of an app's jobs until the user opens it again. That's an OS rule no library can work around. Normal process death (swiped away, killed for memory) keeps the jobs. Verified on an emulator: events queued during a server outage were delivered about 40 s after `am kill`, from a process Android started only for the job.
 
 ### 7.2 iOS
 
-Layered, most reliable first:
-1. **Background exit flush:** on `didEnterBackground`, call `beginBackgroundTask` and run the native uploader within the ~30 s grace period. This catches most events in practice.
-2. **`BGAppRefreshTask`** (`dev.beesync.refresh`): scheduled whenever the queue is non-empty when the app backgrounds.
-3. **`BGProcessingTask`** (`dev.beesync.processing`, `requiresNetworkConnectivity = true`): for large backlogs.
+Implemented in `ios/Classes/` (`BackgroundDelivery.swift`, `NativeUploader.swift`, `BeeSyncStore.swift`). Layered, most reliable first:
+1. **Background exit flush:** on `didEnterBackground`, call `beginBackgroundTask` and run the native uploader within the extra time iOS grants (about 30 s). This catches most events in practice. Dart also flushes when the app is hidden; the leases keep the two from sending the same events. Verified on the Simulator: after a server outage, the exit flush (`ios_bg_exit`) delivered all queued events and Dart's flush found nothing left.
+2. **`BGAppRefreshTask`** (`dev.beesync.refresh`): submitted when the queue is non-empty as the app backgrounds, and after each background run, with `earliestBeginDate` at the backoff end (default 15 min).
+3. **`BGProcessingTask`** (`dev.beesync.processing`, `requiresNetworkConnectivity = true`): for larger backlogs.
 
-Every task honors its `expirationHandler` by cancelling the in-flight request; the lease expiry handles cleanup.
+Uploads run on a private serial queue. Expiration handlers set a flag the uploader checks between batches, and the exit flush ends its background task right away. Leases release anything left in flight. Both tasks are cancelled once the queue drains. The uploader uses the system `libsqlite3` (the same library sqflite uses on iOS), `URLSession`, and a hand-written gzip wrapper, because Foundation only offers raw DEFLATE.
 
-User setup (documented, validated at init with a clear warning if missing):
-- `Info.plist`: `BGTaskSchedulerPermittedIdentifiers` = `[dev.beesync.refresh, dev.beesync.processing]`; `UIBackgroundModes` = `fetch`, `processing`.
-- Registration happens in the plugin's `register(with:)`, which runs during `didFinishLaunching` — satisfying Apple's "register before launch completes" rule.
-- iOS 13+.
+User setup (validated at startup; problems are logged as warnings through `BeeLogger`):
+- `Info.plist`: `BGTaskSchedulerPermittedIdentifiers` = `[dev.beesync.refresh, dev.beesync.processing]`; `UIBackgroundModes` = `fetch`, `processing`. Identifiers missing from Info.plist are not registered, because registering them would crash.
+- Registration happens in the plugin's `register(with:)`, which runs during `didFinishLaunching`, satisfying Apple's rule that handlers are registered before launch completes. Apps that register plugins later (for example scene-based setups) call `BeeSyncPlugin.registerBackgroundTasks()` from `didFinishLaunching`.
+- iOS 13+ for the plugin. The example app targets iOS 15 because of the installed Xcode.
+- The database stays at the default iOS file protection (`completeUntilFirstUserAuthentication`), so background runs can read it while the device is locked after the first unlock.
+
+**Not yet verified:** BGTaskScheduler doesn't run on the Simulator, so layers 2 and 3 need a device test. In Xcode, pause the app and run `e -l objc -- (void)[[BGTaskScheduler sharedScheduler] _simulateLaunchForTaskWithIdentifier:@"dev.beesync.refresh"]`, then resume.
 
 **Expectation to document loudly:** iOS schedules BG tasks at its discretion (app usage patterns, battery, Low Power Mode). They may run hours later or not at all if the user force-quits the app. Layer 1 is the workhorse.
 
@@ -373,7 +385,7 @@ Dependencies (kept minimal): `sqflite`, `path_provider`, `uuid`, `cryptography`,
 | Version | Scope | Exit criteria |
 |---|---|---|
 | **v0.1** — Dart core ✅ | API, sqflite store, claim protocol, batching, retry/backoff/bisection, `HttpTransport`, retention, consent, stats/logger, test harness | ≥ 90% line coverage of `core/` + `store/`; works on Android/iOS foreground only |
-| **v0.2** — Background | `spec/` conformance suite; Android WorkManager uploader; iOS exit-flush + BGTasks; `meta`-synced transport config; `bg_log` | Example app delivers events queued before force-stop (Android) / backgrounding (iOS) without reopening |
+| **v0.2** — Background ✅ (released 2026-10-18; iOS BGTasks still need a device test) | `spec/` conformance suite; Android WorkManager uploader; iOS exit-flush + BGTasks; `meta`-synced transport config; `bg_log` | Example app delivers events queued before process death (Android ✅ emulator) / backgrounding (iOS ✅ exit flush on Simulator; BGTasks need a device) without reopening |
 | **v0.3** — Hardening | Encryption, inspector widget, per-event rejects, gzip, docs site, pub.dev publish | Pub points 160; README with server dedupe guide and iOS caveats |
 | **v1.0** | API freeze after real-app feedback | — |
 

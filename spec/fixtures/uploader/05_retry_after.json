@@ -1,0 +1,47 @@
+{
+  "description": "Retry-After wins when longer than the computed backoff.",
+  "now": 1760000000000,
+  "events": [
+    {
+      "id": "a",
+      "name": "evt",
+      "properties": {
+        "k": "a"
+      },
+      "priority": "normal",
+      "created_at": 1759999940000,
+      "attempts": 2,
+      "next_attempt_at": 0,
+      "lease_owner": null,
+      "lease_until": null
+    }
+  ],
+  "responses": [
+    {
+      "status": 429,
+      "headers": {
+        "retry-after": "120"
+      },
+      "body": ""
+    }
+  ],
+  "expect": {
+    "status": "backingOff",
+    "requests": [
+      [
+        "a"
+      ]
+    ],
+    "remaining": [
+      {
+        "id": "a",
+        "attempts": 3,
+        "next_attempt_at": 1760000120000
+      }
+    ],
+    "counters": {},
+    "meta": {
+      "flush_not_before": 1760000120000
+    }
+  }
+}

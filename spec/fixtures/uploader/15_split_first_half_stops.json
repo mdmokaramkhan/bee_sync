@@ -1,0 +1,114 @@
+{
+  "description": "If the first half stops the run, the second half is released untouched.",
+  "now": 1760000000000,
+  "events": [
+    {
+      "id": "a",
+      "name": "evt",
+      "properties": {
+        "k": "a"
+      },
+      "priority": "normal",
+      "created_at": 1759999940000,
+      "attempts": 0,
+      "next_attempt_at": 0,
+      "lease_owner": null,
+      "lease_until": null
+    },
+    {
+      "id": "b",
+      "name": "evt",
+      "properties": {
+        "k": "b"
+      },
+      "priority": "normal",
+      "created_at": 1759999940000,
+      "attempts": 0,
+      "next_attempt_at": 0,
+      "lease_owner": null,
+      "lease_until": null
+    },
+    {
+      "id": "c",
+      "name": "evt",
+      "properties": {
+        "k": "c"
+      },
+      "priority": "normal",
+      "created_at": 1759999940000,
+      "attempts": 0,
+      "next_attempt_at": 0,
+      "lease_owner": null,
+      "lease_until": null
+    },
+    {
+      "id": "d",
+      "name": "evt",
+      "properties": {
+        "k": "d"
+      },
+      "priority": "normal",
+      "created_at": 1759999940000,
+      "attempts": 0,
+      "next_attempt_at": 0,
+      "lease_owner": null,
+      "lease_until": null
+    }
+  ],
+  "responses": [
+    {
+      "status": 400,
+      "headers": {},
+      "body": ""
+    },
+    {
+      "status": 503,
+      "headers": {},
+      "body": ""
+    }
+  ],
+  "expect": {
+    "status": "backingOff",
+    "requests": [
+      [
+        "a",
+        "b",
+        "c",
+        "d"
+      ],
+      [
+        "a",
+        "b"
+      ]
+    ],
+    "remaining": [
+      {
+        "id": "a",
+        "attempts": 1,
+        "next_attempt_at": {
+          "min": 1760000001000,
+          "max": 1760000002000
+        }
+      },
+      {
+        "id": "b",
+        "attempts": 1,
+        "next_attempt_at": {
+          "min": 1760000001000,
+          "max": 1760000002000
+        }
+      },
+      {
+        "id": "c",
+        "attempts": 0,
+        "next_attempt_at": 0
+      },
+      {
+        "id": "d",
+        "attempts": 0,
+        "next_attempt_at": 0
+      }
+    ],
+    "counters": {}
+  }
+}

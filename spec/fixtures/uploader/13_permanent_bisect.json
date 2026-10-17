@@ -1,0 +1,115 @@
+{
+  "description": "Other 4xx bisects the batch to drop only the refused event.",
+  "now": 1760000000000,
+  "events": [
+    {
+      "id": "a",
+      "name": "evt",
+      "properties": {
+        "k": "a"
+      },
+      "priority": "normal",
+      "created_at": 1759999940000,
+      "attempts": 0,
+      "next_attempt_at": 0,
+      "lease_owner": null,
+      "lease_until": null
+    },
+    {
+      "id": "b",
+      "name": "evt",
+      "properties": {
+        "k": "b"
+      },
+      "priority": "normal",
+      "created_at": 1759999940000,
+      "attempts": 0,
+      "next_attempt_at": 0,
+      "lease_owner": null,
+      "lease_until": null
+    },
+    {
+      "id": "p",
+      "name": "evt",
+      "properties": {
+        "k": "p"
+      },
+      "priority": "normal",
+      "created_at": 1759999940000,
+      "attempts": 0,
+      "next_attempt_at": 0,
+      "lease_owner": null,
+      "lease_until": null
+    },
+    {
+      "id": "d",
+      "name": "evt",
+      "properties": {
+        "k": "d"
+      },
+      "priority": "normal",
+      "created_at": 1759999940000,
+      "attempts": 0,
+      "next_attempt_at": 0,
+      "lease_owner": null,
+      "lease_until": null
+    }
+  ],
+  "responses": [
+    {
+      "status": 400,
+      "headers": {},
+      "body": ""
+    },
+    {
+      "status": 200,
+      "headers": {},
+      "body": ""
+    },
+    {
+      "status": 400,
+      "headers": {},
+      "body": ""
+    },
+    {
+      "status": 400,
+      "headers": {},
+      "body": ""
+    },
+    {
+      "status": 200,
+      "headers": {},
+      "body": ""
+    }
+  ],
+  "expect": {
+    "status": "drained",
+    "requests": [
+      [
+        "a",
+        "b",
+        "p",
+        "d"
+      ],
+      [
+        "a",
+        "b"
+      ],
+      [
+        "p",
+        "d"
+      ],
+      [
+        "p"
+      ],
+      [
+        "d"
+      ]
+    ],
+    "remaining": [],
+    "counters": {
+      "sent": 3,
+      "dropped.rejectedByServer": 1
+    }
+  }
+}

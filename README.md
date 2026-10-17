@@ -4,7 +4,21 @@ Durable, offline-first event delivery for Flutter.
 
 Every event is written to an on-device SQLite queue **before** any network attempt, then delivered in batches (or right away, for high-priority events) with retries, backoff, consent controls and bounded storage. Delivery is **at-least-once**: each event carries a UUIDv7 `id`, and your server should dedupe on it.
 
-> **Status: v0.1 (Dart core).** Delivery runs while the app is running. Native background delivery (Android WorkManager, iOS background tasks) lands in v0.2; encryption at rest in v0.3. See [docs/DESIGN.md](docs/DESIGN.md).
+> **Status: 0.2.0.** Delivery while the app runs, plus native background delivery on Android (WorkManager) and iOS (upload when backgrounded, plus BGTaskScheduler). Encryption at rest comes in 0.3. See [CHANGELOG.md](CHANGELOG.md) and [doc/DESIGN.md](doc/DESIGN.md).
+
+## Install
+
+bee_sync isn't on pub.dev yet. Depend on it from GitHub:
+
+```yaml
+dependencies:
+  bee_sync:
+    git:
+      url: https://github.com/mdmokaramkhan/bee_sync
+      ref: v0.2.0
+```
+
+Requirements: Dart 3.10+ (Flutter 3.38+), Android API 24+, iOS 13+. iOS needs a few `Info.plist` entries for background delivery (see [Background delivery](#background-delivery)).
 
 ## Quick start
 
@@ -23,8 +37,9 @@ Future<void> main() async {
 }
 
 // Anywhere:
-await BeeSync.instance.track('checkout_started', properties: {'cart_value': 42.5});
-await BeeSync.instance.track(
+final bee = BeeSync.instance;
+await bee.track('checkout_started', properties: {'cart_value': 42.5});
+await bee.track(
   'purchase',
   properties: {'order_id': 'A1'},
   priority: Priority.immediate, // sent right away instead of batched
@@ -101,6 +116,47 @@ bee.events.listen((e) => switch (e) {
 });
 ```
 
+## Background delivery
+
+With `HttpTransport`, events queued when the app goes to the background are uploaded by native code even after the app process is gone. No Flutter engine is started for this. It's on by default (`BackgroundConfig(enabled: true)`).
+
+**Android:** nothing to set up. WorkManager runs the upload once there's network, retries when the backoff ends, and checks every 15 minutes while events remain. One caveat: if the user **force-stops** the app, Android cancels all its jobs until the app is opened again.
+
+**iOS:** add this to your app's `Info.plist`. bee_sync logs a warning at startup if any of it is missing.
+
+```xml
+<key>BGTaskSchedulerPermittedIdentifiers</key>
+<array>
+  <string>dev.beesync.refresh</string>
+  <string>dev.beesync.processing</string>
+</array>
+<key>UIBackgroundModes</key>
+<array>
+  <string>fetch</string>
+  <string>processing</string>
+</array>
+```
+
+When the app goes to the background, bee_sync uses the extra time iOS grants to upload what's queued. This catches most events. It then schedules `BGAppRefreshTask` and `BGProcessingTask` for anything left. iOS decides when those run (it may be hours), and doesn't run them at all after the user force-quits the app. Anything still queued goes out on the next launch.
+
+If your app registers plugins after `didFinishLaunching` returns (some scene-based setups do), also call this in `application(_:didFinishLaunchingWithOptions:)`:
+
+```swift
+BeeSyncPlugin.registerBackgroundTasks()
+```
+
+What the background uploader did shows up in `getStats()` counters and in:
+
+```dart
+for (final entry in await bee.backgroundLog()) print(entry);
+```
+
+Auth tokens: the background uploader uses the headers you last set. If they expire it gets a 401, stops, and waits for the app to call `setHeaders()`. Prefer a long-lived ingestion key over short-lived user tokens for event endpoints.
+
+## Data on the device
+
+Queued events, and the `HttpTransport` headers that native code needs, live in a SQLite file in the app's private storage (`Application Support/bee_sync/bee_sync.db`). In 0.2 they are **not encrypted**; encryption at rest is planned for 0.3. Retention limits (`maxEvents`, `maxBytes`, `maxAge`) cap what's kept, and `setConsent(ConsentState.denied, purge: true)` deletes the queue.
+
 ## Custom transports
 
 Implement `EventTransport` to send anywhere (GraphQL, an analytics SDK, a queue):
@@ -112,7 +168,7 @@ class MyTransport implements EventTransport {
 }
 ```
 
-Custom transports run in the foreground only. Background delivery (v0.2) will require `HttpTransport`.
+Custom transports run in the foreground only: background delivery is done natively and needs `HttpTransport`.
 
 ## Testing your app
 
@@ -134,4 +190,34 @@ await harness.close();
 flutter test
 ```
 
-`spec/` holds the SQL shared with the upcoming native uploaders; `test/store/spec_conformance_test.dart` fails if the Dart copy drifts from it.
+iOS tests (XCTest) run in the example app's `RunnerTests` target. Build once with `flutter build ios --simulator` first:
+
+```bash
+cd example/ios && xcodebuild test -workspace Runner.xcworkspace -scheme Runner -destination 'platform=iOS Simulator,name=iPhone 17'
+```
+
+Android tests (Robolectric) run through the example app's Gradle project:
+
+```bash
+cd example/android && ./gradlew :bee_sync:testDebugUnitTest
+```
+
+`spec/` holds the SQL, the uploader contract and the shared test cases. The Dart, Android and iOS test suites all check against it.
+
+Try it end to end: run the local server, then point the example app at it (`10.0.2.2` is the host machine as seen from the Android emulator):
+
+```bash
+dart run tool/test_server.dart --mode fail
+```
+
+```bash
+cd example && flutter run --dart-define=BEE_ENDPOINT=http://10.0.2.2:8080/events --dart-define=BEE_DEMO_EVENTS=3
+```
+
+Then background the app, kill it with `adb shell am kill dev.beesync.bee_sync_example`, and switch the server to OK with `curl "localhost:8080/mode?set=ok"`. The `android_worker` upload shows up within a minute.
+
+On the iOS Simulator use `BEE_ENDPOINT=http://localhost:8080/events`. Wait out the 30 s backoff, switch the server to OK, then open another app. The upload when the app is backgrounded shows up as `ios_bg_exit`. The Simulator doesn't run BGTasks; to test those on a device, pause the app in Xcode and run `e -l objc -- (void)[[BGTaskScheduler sharedScheduler] _simulateLaunchForTaskWithIdentifier:@"dev.beesync.refresh"]`.
+
+## License
+
+MIT. See [LICENSE](LICENSE).

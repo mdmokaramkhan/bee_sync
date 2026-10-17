@@ -1,0 +1,64 @@
+{
+  "description": "Rows reaching max_attempts are dropped; others back off based on the highest remaining attempt.",
+  "now": 1760000000000,
+  "delivery_config": {
+    "max_attempts": 3
+  },
+  "events": [
+    {
+      "id": "a",
+      "name": "evt",
+      "properties": {
+        "k": "a"
+      },
+      "priority": "normal",
+      "created_at": 1759999940000,
+      "attempts": 2,
+      "next_attempt_at": 0,
+      "lease_owner": null,
+      "lease_until": null
+    },
+    {
+      "id": "b",
+      "name": "evt",
+      "properties": {
+        "k": "b"
+      },
+      "priority": "normal",
+      "created_at": 1759999940000,
+      "attempts": 0,
+      "next_attempt_at": 0,
+      "lease_owner": null,
+      "lease_until": null
+    }
+  ],
+  "responses": [
+    {
+      "status": 500,
+      "headers": {},
+      "body": ""
+    }
+  ],
+  "expect": {
+    "status": "backingOff",
+    "requests": [
+      [
+        "a",
+        "b"
+      ]
+    ],
+    "remaining": [
+      {
+        "id": "b",
+        "attempts": 1,
+        "next_attempt_at": {
+          "min": 1760000001000,
+          "max": 1760000002000
+        }
+      }
+    ],
+    "counters": {
+      "dropped.maxAttempts": 1
+    }
+  }
+}

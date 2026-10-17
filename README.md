@@ -1,20 +1,33 @@
 # bee_sync
 
-Durable, offline-first event delivery for Flutter.
+**Never lose an analytics event.** Durable, offline-first event delivery for Flutter, with native background upload on Android and iOS.
 
-Every event is written to an on-device SQLite queue **before** any network attempt, then delivered in batches (or right away, for high-priority events) with retries, backoff, consent controls and bounded storage. Delivery is **at-least-once**: each event carries a UUIDv7 `id`, and your server should dedupe on it.
+[![pub package](https://img.shields.io/pub/v/bee_sync.svg)](https://pub.dev/packages/bee_sync)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+![Platforms](https://img.shields.io/badge/platforms-Android%20%7C%20iOS-lightgrey.svg)
 
-> **Status: 0.3.0.** Delivery while the app runs, native background delivery on Android (WorkManager) and iOS (upload when backgrounded, plus BGTaskScheduler), and a built-in debug inspector. Encryption at rest is planned after 1.0. See [CHANGELOG.md](CHANGELOG.md) and [doc/DESIGN.md](doc/DESIGN.md).
+Every event is saved to an on-device queue **before** anything touches the network. bee_sync then delivers it in batches, retries on failure, and keeps sending from native background tasks after your app is closed. Offline, crashed, or killed by the OS: the event still arrives.
 
-## Install
+## Features
+
+- 💾 **Durable:** events persist in SQLite first and survive crashes, restarts and long offline periods.
+- 📦 **Batched:** sent in batches, by size, time or app backgrounding; urgent events can go out right away.
+- 🔁 **Resilient:** exponential backoff, `Retry-After`, and smart handling of 401, 413 and 4xx responses.
+- 🌙 **Background upload:** native WorkManager (Android) and BGTaskScheduler (iOS). No Flutter engine needed.
+- 🔒 **Consent-aware:** grant, deny or hold; denying can wipe the queue. The choice is saved across restarts.
+- 📏 **Bounded:** limits on event count, size and age, so the queue never grows forever.
+- 🔍 **Inspector:** a built-in debug screen to watch the queue, requests and background runs live.
+- 🧪 **Testable:** an in-memory test harness and fake transport for your app's tests.
+
+## Quick start
+
+**1. Install**
 
 ```bash
 flutter pub add bee_sync
 ```
 
-Requirements: Dart 3.10+ (Flutter 3.38+), Android API 24+, iOS 13+. iOS needs a few `Info.plist` entries for background delivery (see [Background delivery](#background-delivery)).
-
-## Quick start
+**2. Initialize** once, before `runApp`:
 
 ```dart
 import 'package:bee_sync/bee_sync.dart';
@@ -23,117 +36,24 @@ Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
   await BeeSync.initialize(BeeSyncConfig(
     transport: HttpTransport(
-      endpoint: Uri.parse('https://api.example.com/v1/events'),
-      headers: {'Authorization': 'Bearer $token'},
+      endpoint: Uri.parse('https://api.example.com/events'),
+      headers: {'Authorization': 'Bearer <your-ingestion-key>'},
     ),
   ));
   runApp(const MyApp());
 }
-
-// Anywhere:
-final bee = BeeSync.instance;
-await bee.track('checkout_started', properties: {'cart_value': 42.5});
-await bee.track(
-  'purchase',
-  properties: {'order_id': 'A1'},
-  priority: Priority.immediate, // sent right away instead of batched
-);
 ```
 
-`track()` completes once the event is on disk. It throws `InvalidEventException` for an empty name, non-JSON properties, or a payload over `maxEventBytes` (32 KB by default).
-
-## What gets sent
-
-`HttpTransport` POSTs JSON:
-
-```json
-{
-  "batch_id": "…",
-  "sent_at": 1771234567890,
-  "events": [
-    {"id": "0192…", "name": "purchase", "timestamp": 1771234560000,
-     "priority": "immediate", "attempt": 1, "properties": {"order_id": "A1"}}
-  ]
-}
-```
-
-How responses are handled:
-
-| Response | Result |
-|---|---|
-| 2xx | Delivered. An optional body `{"rejected": ["<id>", …]}` drops just those events. |
-| 408, 429, 5xx, network error | Retried with exponential backoff; `Retry-After` is honoured. |
-| 401, 403 | Kept without using an attempt; automatic flushing pauses until `setHeaders()` or `flush()`. |
-| 413 | Batch is split; a single event that is still too large is dropped. |
-| Other 4xx | Batch is bisected to find and drop only the events the server refuses. |
-
-**Server checklist:** dedupe on `id` (keep ids at least as long as `RetentionPolicy.maxAge`), return 2xx for duplicates, and use `sent_at` to correct device clock skew.
-
-## Configuration
+**3. Track** from anywhere:
 
 ```dart
-BeeSyncConfig(
-  transport: …,
-  batching: BatchingPolicy(flushAt: 20, flushInterval: Duration(seconds: 30),
-                           maxBatchSize: 100, maxBatchBytes: 512 * 1024),
-  retry: RetryPolicy(base: Duration(seconds: 2), max: Duration(minutes: 10),
-                     maxAttempts: 12),
-  retention: RetentionPolicy(maxEvents: 10000, maxBytes: 10 * 1024 * 1024,
-                             maxAge: Duration(days: 7),
-                             overflow: OverflowPolicy.dropOldest),
-  consent: ConsentConfig(initial: ConsentState.granted,
-                         whileUnknown: UnknownConsentBehavior.hold),
-  logger: BeeLogger.console(level: LogLevel.info),
-)
+await BeeSync.instance.track('signup_completed', properties: {'plan': 'pro'});
+
+// Sent right away instead of waiting for the next batch:
+await BeeSync.instance.track('purchase', properties: {'order_id': 'A1'}, priority: Priority.immediate);
 ```
 
-Flushes happen when `flushAt` events are pending, every `flushInterval`, when the app goes to the background, when connectivity returns, after an immediate event, and on `flush()`.
-
-## Consent
-
-```dart
-await bee.setConsent(ConsentState.unknown);              // hold: store, don't send
-await bee.setConsent(ConsentState.granted);              // send held events
-await bee.setConsent(ConsentState.denied, purge: true);  // stop and delete the queue
-```
-
-Consent is persisted and survives restarts. The `initial` value is used only on first launch.
-
-## Observability
-
-```dart
-bee.stats.listen((s) => print(s));          // pending, inFlight, sent, dropped by reason…
-bee.events.listen((e) => switch (e) {
-  Delivered(:final ids) => …,
-  Dropped(:final ids, :final reason) => …,  // overflow, expired, maxAttempts, …
-  FlushFailed(:final reason, :final retryAt) => …,
-});
-```
-
-## Debugging
-
-`BeeSyncInspector` is a debug screen with three tabs:
-- **Status:** pending, in flight, sent and dropped counts, backoff, consent.
-- **Queue:** the stored events. Tap one to see its properties.
-- **Activity:** this app's recent requests with their results, plus the native background log.
-
-It can also flush now, simulate offline (this app's uploads fail so you can watch retries), reset backoff, and purge the queue.
-
-```dart
-import 'package:bee_sync/inspector.dart';
-
-if (kDebugMode) BeeSyncInspector.show(context);
-```
-
-Event properties can contain personal data, so keep the inspector out of release builds.
-
-## Background delivery
-
-With `HttpTransport`, events queued when the app goes to the background are uploaded by native code even after the app process is gone. No Flutter engine is started for this. It's on by default (`BackgroundConfig(enabled: true)`).
-
-**Android:** nothing to set up. WorkManager runs the upload once there's network, retries when the backoff ends, and checks every 15 minutes while events remain. One caveat: if the user **force-stops** the app, Android cancels all its jobs until the app is opened again.
-
-**iOS:** add this to your app's `Info.plist`. bee_sync logs a warning at startup if any of it is missing.
+That's all for Android. On **iOS**, add the background-task entries to `Info.plist`. bee_sync logs a warning at startup if they're missing.
 
 ```xml
 <key>BGTaskSchedulerPermittedIdentifiers</key>
@@ -148,86 +68,113 @@ With `HttpTransport`, events queued when the app goes to the background are uplo
 </array>
 ```
 
-When the app goes to the background, bee_sync uses the extra time iOS grants to upload what's queued. This catches most events. It then schedules `BGAppRefreshTask` and `BGProcessingTask` for anything left. iOS decides when those run (it may be hours), and doesn't run them at all after the user force-quits the app. Anything still queued goes out on the next launch.
+➡️ **Full walkthrough:** [Getting started](doc/getting-started.md)
 
-If your app registers plugins after `didFinishLaunching` returns (some scene-based setups do), also call this in `application(_:didFinishLaunchingWithOptions:)`:
+## How it works
 
-```swift
-BeeSyncPlugin.registerBackgroundTasks()
+```text
+ track()  ──►  SQLite queue  ──►  batch upload  ──►  your server
+  (app)        (on device)        (with retries)      (dedupes by id)
+                    │                    ▲
+                    └── app in background or closed?
+                        Android WorkManager / iOS background tasks
+                        upload natively, no Flutter engine
 ```
 
-What the background uploader did shows up in `getStats()` counters and in:
+- **At-least-once delivery.** An event may arrive twice, but never zero times. Each event has a unique UUIDv7 `id`, so your server can drop duplicates.
+- **One queue, many uploaders.** The app and the native background code share the same database and never send the same event at the same time.
 
-```dart
-for (final entry in await bee.backgroundLog()) print(entry);
-```
+## Your server
 
-Auth tokens: the background uploader uses the headers you last set. If they expire it gets a 401, stops, and waits for the app to call `setHeaders()`. Prefer a long-lived ingestion key over short-lived user tokens for event endpoints.
+bee_sync `POST`s JSON batches to your endpoint:
 
-## Data on the device
-
-Queued events, and the `HttpTransport` headers that native code needs, live in a SQLite file in the app's private storage (`Application Support/bee_sync/bee_sync.db`). They are **not encrypted**; encryption at rest is planned after 1.0, so don't put secrets in event properties. Retention limits (`maxEvents`, `maxBytes`, `maxAge`) cap what's kept, and `setConsent(ConsentState.denied, purge: true)` deletes the queue.
-
-## Custom transports
-
-Implement `EventTransport` to send anywhere (GraphQL, an analytics SDK, a queue):
-
-```dart
-class MyTransport implements EventTransport {
-  @override
-  Future<TransportResult> send(EventBatch batch) async { … return const Success(); }
+```json
+{
+  "batch_id": "6f1c1a52-…",
+  "sent_at": 1771234567890,
+  "events": [
+    { "id": "0199a3c0-…", "name": "purchase", "timestamp": 1771234560000,
+      "priority": "immediate", "attempt": 1, "properties": { "order_id": "A1" } }
+  ]
 }
 ```
 
-Custom transports run in the foreground only: background delivery is done natively and needs `HttpTransport`.
+Reply **2xx** when stored, and **skip ids you've already seen**. Anything else is retried or handled automatically. See the [Server guide](doc/server-guide.md) for response codes and a minimal example server.
+
+## Common tasks
+
+```dart
+final bee = BeeSync.instance;
+
+// Consent: hold events until the user decides, then grant or deny.
+await bee.setConsent(ConsentState.granted);
+await bee.setConsent(ConsentState.denied, purge: true); // stop and delete the queue
+
+// Rotate an auth token (also resumes uploads paused by a 401).
+await bee.setHeaders({'Authorization': 'Bearer $newToken'});
+
+// Send everything now, e.g. before logout.
+await bee.flush();
+
+// Watch what's happening.
+bee.stats.listen((s) => print('pending: ${s.pending}, sent: ${s.sent}'));
+```
+
+All options (batching, retries, retention, consent, logging, custom transports) are in [Configuration](doc/configuration.md).
+
+## Debugging
+
+Open the built-in inspector to see the queue, every request and the native background runs, and to flush, simulate an outage or purge:
+
+```dart
+import 'package:bee_sync/inspector.dart';
+
+if (kDebugMode) BeeSyncInspector.show(context);
+```
+
+Event properties can contain personal data, so keep the inspector out of release builds.
 
 ## Testing your app
 
 ```dart
 import 'package:bee_sync/testing.dart';
 
-final harness = await BeeSyncTestHarness.start();   // in-memory, no network
-await checkout();                                    // calls BeeSync.instance.track
+final harness = await BeeSyncTestHarness.start(); // in-memory, no network
+await checkout();                                  // your code calls BeeSync.instance.track
 await harness.flushAndCollect();
 expect(harness.trackedNames, contains('purchase'));
 await harness.close();
 ```
 
-`FakeTransport` can script responses (`enqueue(const RetryableFailure('503'))`) to test failure handling.
+## Platform support
 
-## Development
+| | Android | iOS | Web / desktop |
+|---|:---:|:---:|:---:|
+| Delivery while the app runs | ✅ API 24+ | ✅ iOS 13+ | ❌ |
+| Background delivery | ✅ WorkManager | ✅ BGTaskScheduler | ❌ |
 
-```bash
-flutter test
-```
+Background delivery requires `HttpTransport`. Custom transports deliver only while the app is running.
 
-iOS tests (XCTest) run in the example app's `RunnerTests` target. Build once with `flutter build ios --simulator` first:
+## Good to know
 
-```bash
-cd example/ios && xcodebuild test -workspace Runner.xcworkspace -scheme Runner -destination 'platform=iOS Simulator,name=iPhone 17'
-```
+- **Force-quit stops background work.** After Android *Force stop* or an iOS swipe-away, the OS runs no background jobs until the app is opened again. Events wait and go out then.
+- **iOS decides when background tasks run.** It may take minutes or hours. Most events still go out on the upload bee_sync makes when the app is backgrounded.
+- **Data is stored unencrypted** in the app's private storage, so don't put secrets in event properties. Encryption at rest is planned after 1.0.
 
-Android tests (Robolectric) run through the example app's Gradle project:
+## Documentation
 
-```bash
-cd example/android && ./gradlew :bee_sync:testDebugUnitTest
-```
+| Guide | What's inside |
+|---|---|
+| [Getting started](doc/getting-started.md) | Install, platform setup, first event, verifying it works |
+| [Background delivery](doc/background-delivery.md) | How the native upload works, its limits, testing and troubleshooting |
+| [Server guide](doc/server-guide.md) | Request format, responses, deduplication, example server |
+| [Configuration](doc/configuration.md) | Every option, consent, priorities, custom transports and stores |
+| [Design](doc/DESIGN.md) | Architecture and design decisions |
+| [Changelog](CHANGELOG.md) | Release history |
 
-`spec/` holds the SQL, the uploader contract and the shared test cases. The Dart, Android and iOS test suites all check against it.
+## Contributing
 
-Try it end to end: run the local server, then point the example app at it (`10.0.2.2` is the host machine as seen from the Android emulator):
-
-```bash
-dart run tool/test_server.dart --mode fail
-```
-
-```bash
-cd example && flutter run --dart-define=BEE_ENDPOINT=http://10.0.2.2:8080/events --dart-define=BEE_DEMO_EVENTS=3
-```
-
-Then background the app, kill it with `adb shell am kill dev.beesync.bee_sync_example`, and switch the server to OK with `curl "localhost:8080/mode?set=ok"`. The `android_worker` upload shows up within a minute.
-
-On the iOS Simulator use `BEE_ENDPOINT=http://localhost:8080/events`. Wait out the 30 s backoff, switch the server to OK, then open another app. The upload when the app is backgrounded shows up as `ios_bg_exit`. The Simulator doesn't run BGTasks; to test those on a device, pause the app in Xcode and run `e -l objc -- (void)[[BGTaskScheduler sharedScheduler] _simulateLaunchForTaskWithIdentifier:@"dev.beesync.refresh"]`.
+Issues and pull requests are welcome. See [CONTRIBUTING.md](CONTRIBUTING.md) for setup, tests and conventions.
 
 ## License
 

@@ -35,6 +35,7 @@
 * The plugin's Android manifest declares `INTERNET`.
 * The iOS podspec links `BackgroundTasks` and `sqlite3`. Package metadata now points to the GitHub repository.
 * Example app: iOS deployment target 15.0 and arm64-only simulator builds, to build with current Xcode and Flutter 3.38. The plugin itself still supports iOS 13+ and Android API 24+.
+* Licensed under MIT (previously a template placeholder).
 
 ### Removed
 * The plugin template's `getPlatformVersion` method channel.

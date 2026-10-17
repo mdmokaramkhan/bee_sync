@@ -217,3 +217,7 @@ cd example && flutter run --dart-define=BEE_ENDPOINT=http://10.0.2.2:8080/events
 Then background the app, kill it with `adb shell am kill dev.beesync.bee_sync_example`, and switch the server to OK with `curl "localhost:8080/mode?set=ok"`. The `android_worker` upload shows up within a minute.
 
 On the iOS Simulator use `BEE_ENDPOINT=http://localhost:8080/events`. Wait out the 30 s backoff, switch the server to OK, then open another app. The upload when the app is backgrounded shows up as `ios_bg_exit`. The Simulator doesn't run BGTasks; to test those on a device, pause the app in Xcode and run `e -l objc -- (void)[[BGTaskScheduler sharedScheduler] _simulateLaunchForTaskWithIdentifier:@"dev.beesync.refresh"]`.
+
+## License
+
+MIT. See [LICENSE](LICENSE).

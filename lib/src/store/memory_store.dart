@@ -115,6 +115,30 @@ class InMemoryEventStore implements EventStore {
   );
 
   @override
+  Future<List<QueuedEvent>> inspect({
+    required int now,
+    int limit = 200,
+  }) async => [
+    for (final r in _rows.take(limit))
+      QueuedEvent(
+        id: r.id,
+        name: r.name,
+        priority: r.priority,
+        createdAt: DateTime.fromMillisecondsSinceEpoch(
+          r.createdAt,
+          isUtc: true,
+        ),
+        attempts: r.attempts,
+        nextAttemptAt: r.nextAttemptAt > now
+            ? DateTime.fromMillisecondsSinceEpoch(r.nextAttemptAt, isUtc: true)
+            : null,
+        sizeBytes: r.payload.length,
+        inFlight: r.isLeased(now),
+        payload: r.payload,
+      ),
+  ];
+
+  @override
   Future<List<String>> deleteExpired({
     required int createdBefore,
     required int now,

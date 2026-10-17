@@ -721,6 +721,103 @@ void main() {
     });
   });
 
+  group('diagnostics', () {
+    rigTest('debugActivity records requests and drops, newest first', (rig) {
+      rig.start(batching: const BatchingPolicy(flushAt: 100));
+      rig.track('a');
+      rig.transport.enqueue(
+        const RetryableFailure('HTTP 503', retryAfter: Duration(seconds: 30)),
+      );
+      rig.wait(rig.bee.flush());
+      rig.wait(rig.bee.resetBackoff());
+      rig.wait(rig.bee.flush());
+      rig.wait(rig.bee.purgeQueue()); // nothing left: no drop entry
+
+      final activity = rig.bee.debugActivity;
+      expect(activity, hasLength(2));
+      final ok = activity[0] as RequestActivity;
+      final failed = activity[1] as RequestActivity;
+      expect(ok.succeeded, isTrue);
+      expect(ok.outcome, '2xx: 1 accepted');
+      expect(ok.events, 1);
+      expect(failed.succeeded, isFalse);
+      expect(failed.outcome, 'HTTP 503, retry after 30s');
+      expect(failed.batchId, isNot(ok.batchId));
+    });
+
+    rigTest('debugActivity keeps the last 50 entries', (rig) {
+      rig.start(batching: const BatchingPolicy(flushAt: 1000));
+      for (var i = 0; i < 60; i++) {
+        rig.track('e$i');
+        rig.wait(rig.bee.flush());
+      }
+      expect(rig.bee.debugActivity, hasLength(50));
+      expect(rig.transport.batches, hasLength(60));
+    });
+
+    rigTest('simulate offline fails uploads without calling the transport', (
+      rig,
+    ) {
+      rig.start();
+      rig.bee.debugSimulateOffline = true;
+      rig.track('a', priority: Priority.immediate);
+      rig.elapse(const Duration(milliseconds: 100));
+
+      expect(rig.transport.batches, isEmpty);
+      expect(rig.eventsOf<FlushFailed>().single.reason, 'Simulated offline');
+      expect(
+        (rig.bee.debugActivity.first as RequestActivity).outcome,
+        'Simulated offline',
+      );
+      expect(rig.stored, 1);
+
+      // Back online: clear the backoff it caused and the event goes out.
+      rig.bee.debugSimulateOffline = false;
+      rig.wait(rig.bee.resetBackoff());
+      rig.wait(rig.bee.flush());
+      expect(rig.sentNames, ['a']);
+    });
+
+    rigTest('resetBackoff makes deferred events ready again', (rig) {
+      rig.start(
+        batching: const BatchingPolicy(flushInterval: Duration(hours: 1)),
+      );
+      rig.transport.enqueue(
+        const RetryableFailure('down', retryAfter: Duration(minutes: 30)),
+      );
+      rig.track('a', priority: Priority.immediate);
+      rig.elapse(const Duration(seconds: 1));
+      expect(rig.stats.backoffUntil, isNotNull);
+      expect(rig.wait(rig.bee.debugQueue()).single.nextAttemptAt, isNotNull);
+
+      rig.wait(rig.bee.resetBackoff());
+      expect(rig.stats.backoffUntil, isNull);
+      expect(rig.wait(rig.bee.debugQueue()).single.nextAttemptAt, isNull);
+    });
+
+    rigTest('purgeQueue drops everything as purged', (rig) {
+      rig.start(consent: const ConsentConfig(initial: ConsentState.unknown));
+      final ids = [rig.track('a'), rig.track('b')];
+      expect(rig.wait(rig.bee.purgeQueue()), 2);
+      expect(rig.stored, 0);
+      expect(rig.droppedIds(DropReason.purged), ids);
+      expect(rig.stats.dropped, {DropReason.purged: 2});
+      final drop = rig.bee.debugActivity.first as DropActivity;
+      expect((drop.events, drop.reason), (2, DropReason.purged));
+    });
+
+    rigTest('debugQueue lists stored events with their properties', (rig) {
+      rig.start(consent: const ConsentConfig(initial: ConsentState.unknown));
+      rig.track('a', properties: {'k': 1});
+      rig.track('b', priority: Priority.immediate);
+      final queue = rig.wait(rig.bee.debugQueue());
+      expect([for (final e in queue) e.name], ['a', 'b']);
+      expect(queue[0].properties, {'k': 1});
+      expect(queue[1].priority, Priority.immediate);
+      expect(queue.every((e) => !e.inFlight), isTrue);
+    });
+  });
+
   test('only one instance at a time', () {
     fakeAsync((async) {
       final rig = Rig(async)..start();

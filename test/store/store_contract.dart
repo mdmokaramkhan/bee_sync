@@ -190,6 +190,31 @@ void runStoreContract(String label, Future<EventStore> Function() create) {
       expect(await claimIds(b), ['1']);
     });
 
+    test('inspect lists events oldest first without claiming them', () async {
+      await add('1', priority: Priority.immediate, createdAt: 5, size: 4);
+      await add('2');
+      await add('3');
+      await claimIds(a, limit: 1); // leases 1 (immediate first)
+      await claimIds(a, limit: 1, now: 0);
+      await store.releaseRetry(a, ['2'], nextAttemptAt: 500);
+
+      final listed = await store.inspect(now: 10, limit: 10);
+      expect([for (final e in listed) e.id], ['1', '2', '3']);
+      expect(listed[0].inFlight, isTrue);
+      expect(listed[0].priority, Priority.immediate);
+      expect(listed[0].createdAt.millisecondsSinceEpoch, 5);
+      expect(listed[0].sizeBytes, 4);
+      expect(listed[1].inFlight, isFalse);
+      expect(listed[1].attempts, 1);
+      expect(listed[1].nextAttemptAt?.millisecondsSinceEpoch, 500);
+      expect(listed[2].nextAttemptAt, isNull);
+      expect(listed[2].properties, {});
+      expect(await store.inspect(now: 10, limit: 2), hasLength(2));
+
+      // Nothing was claimed: another owner still gets the free event.
+      expect(await claimIds(b, now: 10), ['3']);
+    });
+
     test('meta values can be set, overwritten and deleted', () async {
       expect(await store.getMeta('k'), isNull);
       await store.setMeta('k', 'v1');

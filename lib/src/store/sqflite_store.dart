@@ -161,6 +161,32 @@ class SqfliteEventStore implements EventStore {
   }
 
   @override
+  Future<List<QueuedEvent>> inspect({required int now, int limit = 200}) async {
+    final rows = await _database.rawQuery(sql.inspectEvents, [limit]);
+    return [
+      for (final r in rows)
+        QueuedEvent(
+          id: r['id']! as String,
+          name: r['name']! as String,
+          priority: Priority.fromCode(r['priority']! as int),
+          createdAt: DateTime.fromMillisecondsSinceEpoch(
+            r['created_at']! as int,
+            isUtc: true,
+          ),
+          attempts: r['attempts']! as int,
+          nextAttemptAt: _nextAttempt(r['next_attempt_at']! as int, now),
+          sizeBytes: r['size_bytes']! as int,
+          inFlight:
+              r['lease_owner'] != null && (r['lease_until']! as int) >= now,
+          payload: r['payload']! as Uint8List,
+        ),
+    ];
+  }
+
+  static DateTime? _nextAttempt(int at, int now) =>
+      at > now ? DateTime.fromMillisecondsSinceEpoch(at, isUtc: true) : null;
+
+  @override
   Future<List<String>> deleteExpired({
     required int createdBefore,
     required int now,

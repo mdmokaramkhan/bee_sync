@@ -116,6 +116,23 @@ bee.events.listen((e) => switch (e) {
 });
 ```
 
+## Debugging
+
+`BeeSyncInspector` is a debug screen with three tabs:
+- **Status:** pending, in flight, sent and dropped counts, backoff, consent.
+- **Queue:** the stored events. Tap one to see its properties.
+- **Activity:** this app's recent requests with their results, plus the native background log.
+
+It can also flush now, simulate offline (this app's uploads fail so you can watch retries), reset backoff, and purge the queue.
+
+```dart
+import 'package:bee_sync/inspector.dart';
+
+if (kDebugMode) BeeSyncInspector.show(context);
+```
+
+Event properties can contain personal data, so keep the inspector out of release builds.
+
 ## Background delivery
 
 With `HttpTransport`, events queued when the app goes to the background are uploaded by native code even after the app process is gone. No Flutter engine is started for this. It's on by default (`BackgroundConfig(enabled: true)`).

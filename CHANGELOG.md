@@ -1,3 +1,27 @@
+## 0.3.0 (unreleased)
+
+### Added
+* **`BeeSyncInspector`**, a debug screen (`import 'package:bee_sync/inspector.dart'`), with three tabs:
+  * **Status:** queue, delivery and settings.
+  * **Queue:** stored events. Properties are shown only when you tap an event.
+  * **Activity:** this app's last 50 requests and drops, plus the native background log.
+
+  Actions: flush now, simulate offline, reset backoff, and purge (asks first). Open it with `BeeSyncInspector.show(context)`. It's meant for debug builds.
+* `BeeSync.purgeQueue()`: deletes every queued event. The events are reported as `Dropped` with the new `DropReason.purged`.
+* `BeeSync.resetBackoff()`: clears the global backoff and makes deferred events ready again. Doesn't flush.
+* Diagnostics used by the inspector:
+  * `BeeSync.debugQueue({limit})`, which returns `QueuedEvent`s;
+  * `BeeSync.debugActivity`, which returns `RequestActivity` and `DropActivity` entries;
+  * `BeeSync.debugSimulateOffline`, which makes this app's uploads fail like a network error. The native background uploader isn't affected.
+* `EventStore.inspect({now, limit})`: lists stored events without claiming them. *(Custom stores must implement it.)*
+* Example app: an Inspector button in the app bar.
+
+### Changed
+* `DropReason` has a new value, `purged`. An exhaustive `switch` on `DropReason` needs a case for it.
+
+### Fixed
+* `BeeSyncTestHarness.close()` no longer hangs inside `testWidgets` or `fakeAsync`.
+
 ## 0.2.0 — 2026-10-18
 
 **Native background delivery.** With `HttpTransport`, events still queued when the app goes to the background are delivered by native code on Android and iOS, even after the app process is gone. No Flutter engine is started for it. Dart, Kotlin and Swift all follow one written contract and are tested against the same shared test cases.

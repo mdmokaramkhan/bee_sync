@@ -336,7 +336,7 @@ The Dart and native serializers are checked against the same golden fixtures (`s
 - `events` stream: `Delivered(ids)`, `Dropped(ids, reason)`, `FlushFailed(error, nextRetryAt)`.
 - `BeeLogger` interface with levels; never logs payload contents above `trace`.
 - `backgroundLog()` reads `bg_log`, so apps can see what native did while Dart wasn't running.
-- Planned for v0.3: `BeeSyncInspector` debug widget (queue contents, last request/response, force flush, simulate offline).
+- `BeeSyncInspector` (v0.3, `package:bee_sync/inspector.dart`) has three tabs. **Status** shows counts, backoff, consent and background state. **Queue** reads stored events via `EventStore.inspect`, which claims nothing; properties are shown only on tap. **Activity** shows the last 50 `RequestActivity`/`DropActivity` entries and the native `bg_log`. Actions: flush, simulate offline (this app's transport only), reset backoff, purge.
 
 ---
 

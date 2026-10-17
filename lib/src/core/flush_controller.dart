@@ -16,6 +16,9 @@ abstract interface class FlushListener {
   void onDelivered(List<String> ids);
 
   void onDropped(List<String> ids, DropReason reason);
+
+  /// Every transport call, for diagnostics.
+  void onRequest(EventBatch batch, TransportResult result, Duration elapsed);
 }
 
 enum FlushStatus {
@@ -204,12 +207,16 @@ class FlushController {
 
     final batch = EventBatch(batchId: _uuid.v4(), events: decoded);
     final TransportResult result;
+    final stopwatch = clock.stopwatch()..start();
     try {
       result = await _transport.send(batch);
     } catch (e, st) {
       _log.log(LogLevel.warn, 'Transport threw', error: e, stackTrace: st);
-      return _retry(readable, RetryableFailure('Transport threw: $e'));
+      final failure = RetryableFailure('Transport threw: $e');
+      _listener?.onRequest(batch, failure, stopwatch.elapsed);
+      return _retry(readable, failure);
     }
+    _listener?.onRequest(batch, result, stopwatch.elapsed);
 
     switch (result) {
       case Success(:final rejectedIds):

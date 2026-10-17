@@ -163,6 +163,8 @@ class BeeSyncTestHarness {
 
   Future<void> close() async {
     await bee.close();
-    await _sub.cancel();
+    // Not awaited: cancel() on a broadcast stream returns a root-zone future,
+    // which never resumes inside testWidgets' or fake_async's fake clock.
+    unawaited(_sub.cancel());
   }
 }

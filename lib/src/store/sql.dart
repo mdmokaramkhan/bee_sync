@@ -129,6 +129,14 @@ SELECT id, size_bytes FROM events
 WHERE lease_owner IS NULL OR lease_until < ?
 ORDER BY priority ASC, seq ASC''';
 
+/// Read-only listing for the inspector, FIFO. params: limit
+const String inspectEvents = '''
+SELECT id, name, payload, priority, created_at, size_bytes, attempts,
+  next_attempt_at, lease_owner, lease_until
+FROM events
+ORDER BY seq
+LIMIT ?''';
+
 const String deleteByIds = 'DELETE FROM events WHERE id IN ({ids})';
 
 const String selectAllIds = 'SELECT id FROM events';

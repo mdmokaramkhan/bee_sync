@@ -16,7 +16,7 @@ All values are TEXT.
 | `flush_not_before` | any uploader | ms since epoch, decimal; `0` = none | Global backoff. |
 | `auth_blocked` | any uploader | `1` \| `0` | Set on 401/403. Cleared only by Dart (`setHeaders()` or a successful manual flush). |
 
-Counters live in the `counters` table: `sent`, and `dropped.<reason>`. The reasons are `overflow`, `expired`, `maxAttempts`, `rejectedByServer`, `tooLarge`, `noConsent` and `unreadable`. Increment them with `ensure_counter` + `increment_counter`, in the same transaction as the matching `delete_leased`.
+Counters live in the `counters` table: `sent`, and `dropped.<reason>`. The reasons are `overflow`, `expired`, `maxAttempts`, `rejectedByServer`, `tooLarge`, `noConsent`, `unreadable` and `purged` (written by Dart only, from `purgeQueue()`). Increment them with `ensure_counter` + `increment_counter`, in the same transaction as the matching `delete_leased`.
 
 ### 1.1 `transport_config`
 

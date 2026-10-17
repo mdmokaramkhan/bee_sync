@@ -119,6 +119,9 @@ abstract interface class EventStore {
 
   Future<QueueTotals> totals(int now);
 
+  /// Lists up to [limit] stored events, oldest first, without claiming them.
+  Future<List<QueuedEvent>> inspect({required int now, int limit = 200});
+
   /// Deletes unleased events created before [createdBefore]; returns their ids.
   Future<List<String>> deleteExpired({
     required int createdBefore,

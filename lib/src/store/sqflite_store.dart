@@ -12,7 +12,7 @@ import 'sql.dart' as sql;
 ///
 /// sqflite uses the platform's system SQLite library, the same one the native
 /// background uploaders use, which keeps POSIX file locks consistent within
-/// the process (see docs/DESIGN.md §2.1).
+/// the process (see doc/DESIGN.md §2.1).
 class SqfliteEventStore implements EventStore {
   SqfliteEventStore({required this.path, DatabaseFactory? factory})
     : _factory = factory ?? databaseFactory;

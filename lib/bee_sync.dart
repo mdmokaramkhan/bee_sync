@@ -1,6 +1,6 @@
 /// Durable, offline-first event delivery for Flutter.
 ///
-/// See docs/DESIGN.md for the architecture and delivery guarantees.
+/// See doc/DESIGN.md for the architecture and delivery guarantees.
 library;
 
 export 'src/api/bee_sync.dart' show BeeSync;

@@ -133,7 +133,7 @@ class ConsentConfig {
   final UnknownConsentBehavior whileUnknown;
 }
 
-/// Native background delivery (docs/DESIGN.md §7).
+/// Native background delivery (doc/DESIGN.md §7).
 class BackgroundConfig {
   const BackgroundConfig({this.enabled = true});
 

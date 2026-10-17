@@ -22,7 +22,7 @@ import 'config.dart';
 import 'errors.dart';
 import 'models.dart';
 
-/// Durable event delivery. See docs/DESIGN.md.
+/// Durable event delivery. See doc/DESIGN.md.
 ///
 /// ```dart
 /// final bee = await BeeSync.initialize(BeeSyncConfig(

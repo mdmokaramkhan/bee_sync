@@ -1,6 +1,6 @@
 # bee_sync — Design Document
 
-**Status:** Draft v0.1 · **Date:** 2026-10-17 · **Source:** `deep-research-report.md`
+**Status:** Implemented through 0.2.0 · **Last updated:** 2026-10-18 · **Source:** `deep-research-report.md`
 
 ---
 
@@ -385,7 +385,7 @@ Dependencies (kept minimal): `sqflite`, `path_provider`, `uuid`, `cryptography`,
 | Version | Scope | Exit criteria |
 |---|---|---|
 | **v0.1** — Dart core ✅ | API, sqflite store, claim protocol, batching, retry/backoff/bisection, `HttpTransport`, retention, consent, stats/logger, test harness | ≥ 90% line coverage of `core/` + `store/`; works on Android/iOS foreground only |
-| **v0.2** — Background (spec, Dart, Android and iOS done; iOS BGTasks still need a device test) | `spec/` conformance suite; Android WorkManager uploader; iOS exit-flush + BGTasks; `meta`-synced transport config; `bg_log` | Example app delivers events queued before process death (Android ✅ emulator) / backgrounding (iOS ✅ exit flush on Simulator; BGTasks need a device) without reopening |
+| **v0.2** — Background ✅ (released 2026-10-18; iOS BGTasks still need a device test) | `spec/` conformance suite; Android WorkManager uploader; iOS exit-flush + BGTasks; `meta`-synced transport config; `bg_log` | Example app delivers events queued before process death (Android ✅ emulator) / backgrounding (iOS ✅ exit flush on Simulator; BGTasks need a device) without reopening |
 | **v0.3** — Hardening | Encryption, inspector widget, per-event rejects, gzip, docs site, pub.dev publish | Pub points 160; README with server dedupe guide and iOS caveats |
 | **v1.0** | API freeze after real-app feedback | — |
 

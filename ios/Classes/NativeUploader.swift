@@ -1,7 +1,7 @@
 import Foundation
 
 /// Keep in sync with `version` in pubspec.yaml.
-let beeSyncVersion = "0.2.0-dev"
+let beeSyncVersion = "0.2.0"
 
 enum MetaKeys {
   static let consent = "consent_state"

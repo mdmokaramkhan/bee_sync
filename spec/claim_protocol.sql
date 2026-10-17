@@ -1,4 +1,4 @@
--- bee_sync claim protocol. See docs/DESIGN.md §5.
+-- bee_sync claim protocol. See doc/DESIGN.md §5.
 --
 -- Every uploader (Dart foreground, Android worker, iOS background task) moves
 -- events through: claim -> send -> delete_leased | release_retry | release.

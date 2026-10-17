@@ -10,9 +10,9 @@ Pod::Spec.new do |s|
 Persistent SQLite event queue with batching, retries and consent controls,
 plus native background delivery through BGTaskScheduler.
                        DESC
-  s.homepage         = 'http://example.com' # TODO: real repo URL before publishing
+  s.homepage         = 'https://github.com/mdmokaramkhan/bee_sync'
   s.license          = { :file => '../LICENSE' }
-  s.author           = { 'Your Company' => 'email@example.com' }
+  s.author           = 'Mohammad Mokaram Khan'
   s.source           = { :path => '.' }
   s.source_files = 'Classes/**/*'
   s.dependency 'Flutter'

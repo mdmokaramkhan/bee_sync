@@ -11,7 +11,7 @@ import androidx.work.WorkManager
 import java.util.concurrent.TimeUnit
 
 /**
- * WorkManager scheduling (docs/DESIGN.md §7.1):
+ * WorkManager scheduling (doc/DESIGN.md §7.1):
  * - [FLUSH]: one-time, as soon as there is network, when the app backgrounds
  *   with events still queued.
  * - [PERIODIC]: every 15 minutes (the OS minimum) while events remain.

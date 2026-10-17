@@ -4,7 +4,21 @@ Durable, offline-first event delivery for Flutter.
 
 Every event is written to an on-device SQLite queue **before** any network attempt, then delivered in batches (or right away, for high-priority events) with retries, backoff, consent controls and bounded storage. Delivery is **at-least-once**: each event carries a UUIDv7 `id`, and your server should dedupe on it.
 
-> **Status: 0.2.0-dev.** Delivery while the app runs, plus native background delivery on Android (WorkManager) and iOS (background-exit upload and BGTaskScheduler). Encryption at rest comes in v0.3. See [docs/DESIGN.md](docs/DESIGN.md).
+> **Status: 0.2.0.** Delivery while the app runs, plus native background delivery on Android (WorkManager) and iOS (upload when backgrounded, plus BGTaskScheduler). Encryption at rest comes in 0.3. See [CHANGELOG.md](CHANGELOG.md) and [doc/DESIGN.md](doc/DESIGN.md).
+
+## Install
+
+bee_sync isn't on pub.dev yet. Depend on it from GitHub:
+
+```yaml
+dependencies:
+  bee_sync:
+    git:
+      url: https://github.com/mdmokaramkhan/bee_sync
+      ref: v0.2.0
+```
+
+Requirements: Dart 3.10+ (Flutter 3.38+), Android API 24+, iOS 13+. iOS needs a few `Info.plist` entries for background delivery (see [Background delivery](#background-delivery)).
 
 ## Quick start
 
@@ -23,8 +37,9 @@ Future<void> main() async {
 }
 
 // Anywhere:
-await BeeSync.instance.track('checkout_started', properties: {'cart_value': 42.5});
-await BeeSync.instance.track(
+final bee = BeeSync.instance;
+await bee.track('checkout_started', properties: {'cart_value': 42.5});
+await bee.track(
   'purchase',
   properties: {'order_id': 'A1'},
   priority: Priority.immediate, // sent right away instead of batched
@@ -136,7 +151,11 @@ What the background uploader did shows up in `getStats()` counters and in:
 for (final entry in await bee.backgroundLog()) print(entry);
 ```
 
-Auth tokens: the background uploader uses the headers you last set. If they expire it gets a 401, stops, and waits for the app to call `setHeaders()`.
+Auth tokens: the background uploader uses the headers you last set. If they expire it gets a 401, stops, and waits for the app to call `setHeaders()`. Prefer a long-lived ingestion key over short-lived user tokens for event endpoints.
+
+## Data on the device
+
+Queued events, and the `HttpTransport` headers that native code needs, live in a SQLite file in the app's private storage (`Application Support/bee_sync/bee_sync.db`). In 0.2 they are **not encrypted**; encryption at rest is planned for 0.3. Retention limits (`maxEvents`, `maxBytes`, `maxAge`) cap what's kept, and `setConsent(ConsentState.denied, purge: true)` deletes the queue.
 
 ## Custom transports
 
@@ -196,3 +215,5 @@ cd example && flutter run --dart-define=BEE_ENDPOINT=http://10.0.2.2:8080/events
 ```
 
 Then background the app, kill it with `adb shell am kill dev.beesync.bee_sync_example`, and switch the server to OK with `curl "localhost:8080/mode?set=ok"`. The `android_worker` upload shows up within a minute.
+
+On the iOS Simulator use `BEE_ENDPOINT=http://localhost:8080/events`. Wait out the 30 s backoff, switch the server to OK, then open another app. The upload when the app is backgrounded shows up as `ios_bg_exit`. The Simulator doesn't run BGTasks; to test those on a device, pause the app in Xcode and run `e -l objc -- (void)[[BGTaskScheduler sharedScheduler] _simulateLaunchForTaskWithIdentifier:@"dev.beesync.refresh"]`.

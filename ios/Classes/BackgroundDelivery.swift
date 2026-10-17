@@ -3,7 +3,7 @@ import Foundation
 import UIKit
 import os.log
 
-/// iOS background delivery (docs/DESIGN.md §7.2), most reliable first:
+/// iOS background delivery (doc/DESIGN.md §7.2), most reliable first:
 /// 1. Background exit: when the app enters the background, ask for extra
 ///    time (`beginBackgroundTask`) and run the uploader.
 /// 2. `BGAppRefreshTask` (`dev.beesync.refresh`), at or after the backoff.

@@ -10,7 +10,7 @@ import '../version.dart';
 import 'event_transport.dart';
 import 'wire_format.dart';
 
-/// POSTs batches as JSON to [endpoint]. See docs/DESIGN.md §10 for the
+/// POSTs batches as JSON to [endpoint]. See doc/DESIGN.md §10 for the
 /// format and how responses are interpreted.
 ///
 /// This is the only transport the native background uploaders can replay, so

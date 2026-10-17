@@ -59,6 +59,26 @@ void runStoreContract(String label, Future<EventStore> Function() create) {
       expect(await claimIds(a, limit: 3), ['2', '4', '1']);
     });
 
+    test(
+      'insertAndCount inserts and returns totals including the event',
+      () async {
+        await add('1', size: 10);
+        await claimIds(a); // 1 is in flight
+        final t = await store.insertAndCount(
+          NewEvent(
+            id: '2',
+            name: 'e_2',
+            payload: Uint8List.fromList(utf8.encode('{"k":1}')),
+            priority: Priority.normal,
+            createdAt: 0,
+          ),
+          now: 0,
+        );
+        expect((t.total, t.inFlight, t.pending, t.bytes), (2, 1, 1, 17));
+        expect(await claimIds(b, now: lease + 1), ['1', '2']);
+      },
+    );
+
     test('round-trips event fields', () async {
       await add('x', priority: Priority.immediate, createdAt: 42, size: 5);
       final e = (await store.claim(

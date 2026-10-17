@@ -15,8 +15,11 @@
   * `BeeSync.debugSimulateOffline`, which makes this app's uploads fail like a network error. The native background uploader isn't affected.
 * `EventStore.inspect({now, limit})`: lists stored events without claiming them. *(Custom stores must implement it.)*
 * Example app: an Inspector button in the app bar.
+* `FakeTransport(latency: …)` simulates server response time.
+* `track()` throughput benchmark, on host and on device, with a recorded baseline (`benchmark/`).
 
 ### Changed
+* **`track()` is about 2× faster** (1.7–2.0× in the benchmarks on host, iOS Simulator and Android emulator). It now makes one store call instead of five: the new `EventStore.insertAndCount`, which for sqflite is an insert plus a count. The eviction transaction only runs when the queue is over its limits. See `benchmark/README.md`. *(Custom stores must implement `insertAndCount`.)*
 * `DropReason` has a new value, `purged`. An exhaustive `switch` on `DropReason` needs a case for it.
 
 ### Fixed

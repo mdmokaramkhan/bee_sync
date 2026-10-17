@@ -88,6 +88,10 @@ abstract interface class EventStore {
 
   Future<void> insert(NewEvent event);
 
+  /// Inserts [event] and returns the queue totals including it, in one
+  /// round trip to the database (one platform-channel call with sqflite).
+  Future<QueueTotals> insertAndCount(NewEvent event, {required int now});
+
   /// Leases up to [limit] ready events to [owner] until [leaseUntil] and
   /// returns everything [owner] holds, highest priority first, then FIFO.
   Future<List<StoredEvent>> claim({

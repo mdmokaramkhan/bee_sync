@@ -16,10 +16,13 @@ void main() {
   IntegrationTestWidgetsFlutterBinding.ensureInitialized();
 
   testWidgets('track() throughput (device, sqflite)', (tester) async {
-    Future<BeeSync> open({required int flushAt}) async {
+    Future<BeeSync> open({
+      required int flushAt,
+      required Duration latency,
+    }) async {
       final bee = await BeeSync.initialize(
         BeeSyncConfig(
-          transport: FakeTransport(),
+          transport: FakeTransport(latency: latency),
           batching: BatchingPolicy(flushAt: flushAt),
           background: const BackgroundConfig(enabled: false),
           logger: const BeeLogger.silent(),

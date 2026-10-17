@@ -1,7 +1,8 @@
 # Benchmarks
 
 `track()` throughput: how fast events can be persisted. The transport is a
-`FakeTransport`, so only `track()` and the on-device store are measured.
+`FakeTransport`, so `track()` and the on-device store are measured, not the
+network.
 
 | Where | Command |
 |---|---|
@@ -10,33 +11,50 @@
 
 Simulators and emulators run in debug mode (JIT). Treat their numbers as indicative; a physical device in profile mode is the reference.
 
-## Baseline: 0.3.0-dev, 2026-10-18
+## Scenarios
 
-Each normal-priority `track()` currently makes **5 store round trips**: insert; an eviction check, which is a transaction (BEGIN, totals query, COMMIT); and a totals query for the `flushAt` check. On Android every round trip crosses the platform channel.
+- **sequential / 2 KB / concurrent burst:** consent is held at `unknown`, so nothing uploads and only `track()` is measured.
+- **flushing every 20, 50 ms server:** realistic. Uploads run alongside tracking against a server that answers in 50 ms.
+- **flushing every 20, 0 ms server:** a worst case that no real backend matches. The flush never waits on the network, so it competes with `track()` for the database non-stop.
+
+## 0.3.0-dev: `track()` store round trips, 5 → 1 (2026-10-18)
+
+**Before:** a normal-priority `track()` made 5 store round trips: insert; an eviction check, which was a transaction (BEGIN, count, COMMIT); and a count for `flushAt`.
+
+**After:** it makes one store call, `EventStore.insertAndCount`. For sqflite that is two plain statements: an insert, then a count. The eviction transaction runs only when the count is over the retention limits, and the count also answers the `flushAt` check.
+
+An sqflite `Batch` was tried first and measured slower: `Batch.commit()` wraps the batch in its own transaction, which means three platform calls plus a Dart-side lock.
 
 **Host (macOS, Apple silicon, FFI)**
 
-| scenario | events | total | events/s | p50 ms | p95 ms | p99 ms |
-|---|---:|---:|---:|---:|---:|---:|
-| sequential, small (~60 B) | 1000 | 485 ms | 2061 | 0.43 | 0.68 | 0.86 |
-| sequential, 2 KB | 500 | 214 ms | 2333 | 0.39 | 0.71 | 1.10 |
-| concurrent burst, small | 1000 | 444 ms | 2248 | — | — | — |
-| sequential, flushing every 20 | 1000 | 497 ms | 2011 | 0.36 | 1.25 | 1.48 |
+| scenario | before: events/s · p50 | after: events/s · p50 | speed-up |
+|---|---:|---:|---:|
+| sequential, small (~60 B) | 2,017 · 0.45 ms | 3,562 · 0.24 ms | 1.8× |
+| sequential, 2 KB | 2,099 · 0.41 ms | 3,641 · 0.23 ms | 1.7× |
+| concurrent burst, small | 2,253 | 4,221 | 1.9× |
+| flushing every 20, 0 ms server | 1,676 · 0.38 ms | 1,209 · 0.78 ms | 0.7× |
+| flushing every 20, 50 ms server | 2,066 · 0.38 ms | 4,216 · 0.19 ms | 2.0× |
 
 **iOS Simulator (iPhone 17, debug)**
 
-| scenario | events | total | events/s | p50 ms | p95 ms | p99 ms |
-|---|---:|---:|---:|---:|---:|---:|
-| sequential, small (~60 B) | 1000 | 466 ms | 2145 | 0.42 | 0.64 | 1.20 |
-| sequential, 2 KB | 500 | 307 ms | 1629 | 0.61 | 0.88 | 1.00 |
-| concurrent burst, small | 1000 | 429 ms | 2329 | — | — | — |
-| sequential, flushing every 20 | 1000 | 554 ms | 1803 | 0.55 | 0.61 | 0.71 |
+| scenario | before: events/s · p50 | after: events/s · p50 | speed-up |
+|---|---:|---:|---:|
+| sequential, small (~60 B) | 2,114 · 0.43 ms | 3,820 · 0.22 ms | 1.8× |
+| sequential, 2 KB | 1,557 · 0.65 ms | 2,905 · 0.34 ms | 1.9× |
+| concurrent burst, small | 2,048 | 4,218 | 2.1× |
+| flushing every 20, 0 ms server | 2,017 · 0.35 ms | 1,313 · 0.74 ms | 0.7× |
+| flushing every 20, 50 ms server | 2,765 · 0.34 ms | 5,601 · 0.17 ms | 2.0× |
 
 **Android emulator (Pixel 9, debug)**
 
-| scenario | events | total | events/s | p50 ms | p95 ms | p99 ms |
-|---|---:|---:|---:|---:|---:|---:|
-| sequential, small (~60 B) | 1000 | 2136 ms | 468 | 1.34 | 4.05 | 17.97 |
-| sequential, 2 KB | 500 | 744 ms | 671 | 1.28 | 2.81 | 4.16 |
-| concurrent burst, small | 1000 | 1424 ms | 702 | — | — | — |
-| sequential, flushing every 20 | 1000 | 1754 ms | 570 | 1.24 | 4.46 | 5.68 |
+| scenario | before: events/s · p50 | after: events/s · p50 | speed-up |
+|---|---:|---:|---:|
+| sequential, small (~60 B) | 613 · 1.35 ms | 1,086 · 0.73 ms | 1.8× |
+| sequential, 2 KB | 701 · 1.27 ms | 1,228 · 0.68 ms | 1.8× |
+| concurrent burst, small | 722 | 1,188 | 1.6× |
+| flushing every 20, 0 ms server | 600 · 1.21 ms | 352 · 2.71 ms | 0.6× |
+| flushing every 20, 50 ms server | 788 · 1.13 ms | 1,427 · 0.60 ms | 1.8× |
+
+The worst-case "0 ms server" scenario is slower after the change. Faster inserts give a non-stop flush more chances to interleave with `track()` for the database. With any realistic server latency, as in the 50 ms row, the new path is faster.
+
+An earlier baseline in this file was measured incorrectly. A flush started at startup kept uploading during the supposedly upload-free scenarios, so the numbers mixed `track()` with uploads. The scenarios now hold consent at `unknown`.

@@ -21,10 +21,15 @@ export 'src/store/memory_store.dart' show InMemoryEventStore;
 
 /// [EventTransport] that records batches and replies from a script.
 class FakeTransport implements EventTransport {
-  FakeTransport({TransportResult defaultResult = const Success()})
-    : _default = defaultResult;
+  FakeTransport({
+    TransportResult defaultResult = const Success(),
+    this.latency = Duration.zero,
+  }) : _default = defaultResult;
 
   final TransportResult _default;
+
+  /// Simulated server response time for every send.
+  final Duration latency;
   final Queue<TransportResult Function(EventBatch)> _script = Queue();
 
   /// Every batch passed to [send], in order.
@@ -46,6 +51,7 @@ class FakeTransport implements EventTransport {
   @override
   Future<TransportResult> send(EventBatch batch) async {
     batches.add(batch);
+    if (latency > Duration.zero) await Future<void>.delayed(latency);
     if (_script.isNotEmpty) return _script.removeFirst()(batch);
     return fallback?.call(batch) ?? _default;
   }

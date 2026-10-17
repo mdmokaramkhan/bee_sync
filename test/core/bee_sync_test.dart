@@ -818,6 +818,40 @@ void main() {
     });
   });
 
+  group('store round trips', () {
+    test('track() makes one store call while under limits', () {
+      fakeAsync((async) {
+        final store = _CountingStore();
+        final rig = Rig(async, store: store)
+          ..start(batching: const BatchingPolicy(flushAt: 1000));
+        store.calls.clear();
+
+        rig.track('a');
+        rig.track('b', priority: Priority.immediate);
+        expect(store.calls, ['insertAndCount', 'insertAndCount']);
+        rig.close();
+      });
+    });
+
+    test('track() evicts only when the count is over the limits', () {
+      fakeAsync((async) {
+        final store = _CountingStore();
+        final rig = Rig(async, store: store)
+          ..start(
+            consent: const ConsentConfig(initial: ConsentState.unknown),
+            retention: const RetentionPolicy(maxEvents: 1),
+          );
+        rig.track('a');
+        store.calls.clear();
+
+        rig.track('b');
+        expect(store.calls.take(2), ['insertAndCount', 'evict']);
+        expect(rig.stored, 1);
+        rig.close();
+      });
+    });
+  });
+
   test('only one instance at a time', () {
     fakeAsync((async) {
       final rig = Rig(async)..start();
@@ -831,4 +865,43 @@ void main() {
       expect(() => BeeSync.instance, throwsStateError);
     });
   });
+}
+
+/// Records which store methods track() calls.
+class _CountingStore extends InMemoryEventStore {
+  final calls = <String>[];
+
+  @override
+  Future<void> insert(NewEvent event) {
+    calls.add('insert');
+    return super.insert(event);
+  }
+
+  @override
+  Future<QueueTotals> insertAndCount(NewEvent event, {required int now}) {
+    calls.add('insertAndCount');
+    // Not super.insertAndCount: it calls insert()/totals() internally.
+    return _insertThenCount(event, now);
+  }
+
+  Future<QueueTotals> _insertThenCount(NewEvent event, int now) async {
+    await super.insert(event);
+    return super.totals(now);
+  }
+
+  @override
+  Future<QueueTotals> totals(int now) {
+    calls.add('totals');
+    return super.totals(now);
+  }
+
+  @override
+  Future<List<String>> evict({
+    required int now,
+    required int maxEvents,
+    required int maxBytes,
+  }) {
+    calls.add('evict');
+    return super.evict(now: now, maxEvents: maxEvents, maxBytes: maxBytes);
+  }
 }

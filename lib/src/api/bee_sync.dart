@@ -307,7 +307,8 @@ class BeeSync implements FlushListener {
       }
     }
 
-    await _store.insert(
+    // One round trip: insert and count. Everything below uses this count.
+    final totals = await _store.insertAndCount(
       NewEvent(
         id: id,
         name: name,
@@ -315,16 +316,22 @@ class BeeSync implements FlushListener {
         priority: priority,
         createdAt: now,
       ),
+      now: now,
     );
     _log.log(LogLevel.trace, 'Tracked $name $id ${utf8.decode(payload)}');
 
-    if (retention.overflow == OverflowPolicy.dropOldest) {
+    var pending = totals.pending;
+    if (retention.overflow == OverflowPolicy.dropOldest &&
+        (totals.total > retention.maxEvents ||
+            totals.bytes > retention.maxBytes)) {
+      // Rare: only when the queue is over its limits.
       final evicted = await _store.evict(
         now: now,
         maxEvents: retention.maxEvents,
         maxBytes: retention.maxBytes,
       );
       if (evicted.isNotEmpty) {
+        pending -= evicted.length;
         await _recordDropped(evicted, DropReason.overflow);
       }
     }
@@ -334,7 +341,7 @@ class BeeSync implements FlushListener {
         _immediateTimer = null;
         _requestFlush(immediateOnly: true);
       });
-    } else if ((await _store.totals(now)).pending >= config.batching.flushAt) {
+    } else if (pending >= config.batching.flushAt) {
       _requestFlush();
     }
     _scheduleStats();

@@ -45,6 +45,12 @@ class InMemoryEventStore implements EventStore {
   }
 
   @override
+  Future<QueueTotals> insertAndCount(NewEvent event, {required int now}) async {
+    await insert(event);
+    return totals(now);
+  }
+
+  @override
   Future<List<StoredEvent>> claim({
     required String owner,
     required int now,

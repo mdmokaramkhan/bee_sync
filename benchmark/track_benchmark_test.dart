@@ -25,18 +25,19 @@ void main() {
       addTearDown(() => dir.delete(recursive: true));
       var run = 0;
 
-      Future<BeeSync> open({required int flushAt}) => BeeSync.initialize(
-        BeeSyncConfig(
-          transport: FakeTransport(),
-          batching: BatchingPolicy(flushAt: flushAt),
-          logger: const BeeLogger.silent(),
-        ),
-        store: SqfliteEventStore(
-          path: p.join(dir.path, 'bench_${run++}.db'),
-          factory: databaseFactoryFfi,
-        ),
-        signals: FakePlatformSignals(),
-      );
+      Future<BeeSync> open({required int flushAt, required Duration latency}) =>
+          BeeSync.initialize(
+            BeeSyncConfig(
+              transport: FakeTransport(latency: latency),
+              batching: BatchingPolicy(flushAt: flushAt),
+              logger: const BeeLogger.silent(),
+            ),
+            store: SqfliteEventStore(
+              path: p.join(dir.path, 'bench_${run++}.db'),
+              factory: databaseFactoryFfi,
+            ),
+            signals: FakePlatformSignals(),
+          );
 
       final results = await runTrackBenchmark(open);
       // ignore: avoid_print

@@ -73,16 +73,29 @@ class SqfliteEventStore implements EventStore {
 
   @override
   Future<void> insert(NewEvent event) async {
-    await _database.rawInsert(sql.insertEvent, [
-      event.id,
-      event.name,
-      event.payload,
-      event.encrypted ? 1 : 0,
-      event.priority.code,
-      event.createdAt,
-      event.sizeBytes,
-    ]);
+    await _database.rawInsert(sql.insertEvent, _insertArgs(event));
   }
+
+  @override
+  Future<QueueTotals> insertAndCount(NewEvent event, {required int now}) async {
+    // Two plain calls, deliberately not a batch: sqflite's Batch.commit()
+    // wraps the batch in its own transaction (BEGIN, batch, COMMIT = three
+    // platform calls plus a Dart-side lock), which measured slower per
+    // track() than this. The count may include events inserted concurrently,
+    // which is fine for its uses (eviction check, flushAt trigger).
+    await _database.rawInsert(sql.insertEvent, _insertArgs(event));
+    return totals(now);
+  }
+
+  static List<Object?> _insertArgs(NewEvent event) => [
+    event.id,
+    event.name,
+    event.payload,
+    event.encrypted ? 1 : 0,
+    event.priority.code,
+    event.createdAt,
+    event.sizeBytes,
+  ];
 
   @override
   Future<List<StoredEvent>> claim({

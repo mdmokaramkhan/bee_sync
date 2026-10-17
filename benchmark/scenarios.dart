@@ -6,8 +6,10 @@
 // measured, not the network.
 import 'package:bee_sync/bee_sync.dart';
 
-/// Opens a fresh, empty BeeSync whose batches flush at [flushAt] events.
-typedef OpenBeeSync = Future<BeeSync> Function({required int flushAt});
+/// Opens a fresh, empty BeeSync whose batches flush at [flushAt] events,
+/// sending to a fake server that answers after [latency].
+typedef OpenBeeSync =
+    Future<BeeSync> Function({required int flushAt, required Duration latency});
 
 class BenchResult {
   BenchResult(this.name, this.events, this.total, List<int> latenciesUs)
@@ -72,10 +74,18 @@ Future<List<BenchResult>> runTrackBenchmark(
   int n = 1000,
 }) async {
   Future<BenchResult> scenario(
-    int flushAt,
-    Future<BenchResult> Function(BeeSync bee) body,
-  ) async {
-    final bee = await open(flushAt: flushAt);
+    int? flushAt,
+    Future<BenchResult> Function(BeeSync bee) body, {
+    Duration latency = Duration.zero,
+  }) async {
+    final bee = await open(flushAt: flushAt ?? 1 << 30, latency: latency);
+    // No flushAt: hold consent at `unknown` so nothing uploads at all.
+    // Otherwise a flush started at startup keeps claiming events as they are
+    // tracked and competes with track() for the database. Set explicitly
+    // because consent persists between runs on a device.
+    await bee.setConsent(
+      flushAt == null ? ConsentState.unknown : ConsentState.granted,
+    );
     try {
       return await body(bee);
     } finally {
@@ -84,7 +94,7 @@ Future<List<BenchResult>> runTrackBenchmark(
     }
   }
 
-  const noFlush = 1 << 30; // nothing is sent while measuring
+  const noFlush = null; // nothing is sent while measuring
   return [
     await scenario(
       noFlush,
@@ -100,7 +110,12 @@ Future<List<BenchResult>> runTrackBenchmark(
     ),
     await scenario(
       20,
-      (b) => _sequential(b, 'sequential, flushing every 20', n, _small),
+      (b) => _sequential(b, 'flushing every 20, 0 ms server', n, _small),
+    ),
+    await scenario(
+      20,
+      (b) => _sequential(b, 'flushing every 20, 50 ms server', n, _small),
+      latency: const Duration(milliseconds: 50),
     ),
   ];
 }

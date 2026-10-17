@@ -4,8 +4,19 @@ import 'package:bee_sync/bee_sync.dart';
 import 'package:flutter/material.dart';
 
 /// Any endpoint that answers 2xx to a JSON POST works. httpbin echoes the
-/// request, which is handy for inspecting the wire format.
-final _endpoint = Uri.parse('https://httpbin.org/post');
+/// request, which is handy for inspecting the wire format. To use the local
+/// test server (tool/test_server.dart) from the Android emulator:
+///   flutter run --dart-define=BEE_ENDPOINT=http://10.0.2.2:8080/events
+final _endpoint = Uri.parse(
+  const String.fromEnvironment(
+    'BEE_ENDPOINT',
+    defaultValue: 'https://httpbin.org/post',
+  ),
+);
+
+/// Tracks this many events at startup (`--dart-define=BEE_DEMO_EVENTS=5`),
+/// for scripted end-to-end checks.
+const _demoEvents = int.fromEnvironment('BEE_DEMO_EVENTS');
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -19,6 +30,9 @@ Future<void> main() async {
       logger: const BeeLogger.console(level: LogLevel.debug),
     ),
   );
+  for (var i = 0; i < _demoEvents; i++) {
+    await BeeSync.instance.track('demo_event', properties: {'n': i});
+  }
   runApp(const ExampleApp());
 }
 

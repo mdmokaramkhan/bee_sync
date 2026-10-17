@@ -242,11 +242,16 @@ An auth failure pauses automatic flushes in the foreground too; `setHeaders()` o
 
 ### 7.1 Android
 
-- On app background (and after any failed foreground flush) with a non-empty queue: enqueue unique **OneTimeWorkRequest** `bee_sync_flush`, constraint `NetworkType.CONNECTED`, policy `KEEP`, exponential backoff.
-- While the queue is non-empty, keep a unique **PeriodicWorkRequest** (15 min, the OS minimum) as a safety net; cancel it when the queue drains.
-- Worker = `CoroutineWorker` running `NativeUploader` with `HttpURLConnection` (no OkHttp dependency).
-- Runs in the app process. Same SQLite library as sqflite → lock-safe.
-- `minSdk 23` (Keystore AES-GCM). No manifest changes required from users.
+Implemented in `android/src/main/kotlin/dev/beesync/bee_sync/`.
+
+- When the app goes to the background with a non-empty queue, Dart calls `scheduleBackgroundFlush()`, which enqueues:
+  - unique **OneTimeWorkRequest** `bee_sync_flush` (`NetworkType.CONNECTED`, policy `KEEP`);
+  - unique **PeriodicWorkRequest** `bee_sync_periodic` (15 min, the OS minimum) as a safety net while the queue is non-empty. The worker cancels it once the queue drains.
+- When a run backs off, or is skipped because a backoff is still active (often the app's own failed flush moments earlier), the worker enqueues `bee_sync_retry` (policy `REPLACE`), delayed until `flush_not_before`. WorkManager's own retry/backoff is not used: the worker always returns success.
+- `FlushWorker` (a plain `Worker`) runs `NativeUploader` over `HttpURLConnection` (no OkHttp dependency). There is no Flutter engine: Android starts the process just for the job service, and the uploader reads the database path that `configure()` saved in SharedPreferences.
+- The database is opened with `ENABLE_WRITE_AHEAD_LOGGING` (otherwise Android would switch the file out of WAL on open) and `NO_LOCALIZED_COLLATORS`.
+- `minSdk 24` (the Flutter default). The plugin declares `INTERNET`; no other manifest changes are needed.
+- **Force-stop** (Settings → Force stop, or `adb shell am force-stop`) cancels all of an app's jobs until the user opens it again. That's an OS rule no library can work around. Normal process death (swiped away, killed for memory) keeps the jobs. Verified on an emulator: events queued during a server outage were delivered about 40 s after `am kill`, from a process Android started only for the job.
 
 ### 7.2 iOS
 
@@ -377,7 +382,7 @@ Dependencies (kept minimal): `sqflite`, `path_provider`, `uuid`, `cryptography`,
 | Version | Scope | Exit criteria |
 |---|---|---|
 | **v0.1** — Dart core ✅ | API, sqflite store, claim protocol, batching, retry/backoff/bisection, `HttpTransport`, retention, consent, stats/logger, test harness | ≥ 90% line coverage of `core/` + `store/`; works on Android/iOS foreground only |
-| **v0.2** — Background (in progress: spec + Dart side done) | `spec/` conformance suite; Android WorkManager uploader; iOS exit-flush + BGTasks; `meta`-synced transport config; `bg_log` | Example app delivers events queued before force-stop (Android) / backgrounding (iOS) without reopening |
+| **v0.2** — Background (in progress: spec, Dart and Android done; iOS next) | `spec/` conformance suite; Android WorkManager uploader; iOS exit-flush + BGTasks; `meta`-synced transport config; `bg_log` | Example app delivers events queued before process death (Android ✅ verified on emulator) / backgrounding (iOS) without reopening |
 | **v0.3** — Hardening | Encryption, inspector widget, per-event rejects, gzip, docs site, pub.dev publish | Pub points 160; README with server dedupe guide and iOS caveats |
 | **v1.0** | API freeze after real-app feedback | — |
 

@@ -4,11 +4,9 @@ import android.content.Context
 import io.flutter.embedding.engine.plugins.FlutterPlugin
 
 /**
- * Receives the database location from Dart and schedules background flushes.
- *
- * Placeholder until the WorkManager uploader lands (v0.2 step 3): it stores
- * the setup so a cold-started worker can find the database, and schedules
- * nothing yet.
+ * Dart -> native bridge (pigeons/messages.dart). Records where the database
+ * is, so a cold-started [FlushWorker] can find it, and schedules background
+ * flushes through [BackgroundWork].
  */
 class BeeSyncPlugin : FlutterPlugin, BeeSyncHostApi {
     private lateinit var context: Context
@@ -28,12 +26,13 @@ class BeeSyncPlugin : FlutterPlugin, BeeSyncHostApi {
             .putString(KEY_DATABASE_PATH, setup.databasePath)
             .putBoolean(KEY_ENABLED, setup.enabled)
             .apply()
+        if (!setup.enabled) BackgroundWork.cancelAll(context)
         return emptyList()
     }
 
-    override fun scheduleBackgroundFlush() {}
+    override fun scheduleBackgroundFlush() = BackgroundWork.schedule(context)
 
-    override fun cancelBackgroundFlush() {}
+    override fun cancelBackgroundFlush() = BackgroundWork.cancelAll(context)
 
     companion object {
         const val PREFS = "dev.beesync.bee_sync"

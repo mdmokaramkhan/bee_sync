@@ -1,5 +1,5 @@
 PODS:
-  - bee_sync (0.0.1):
+  - bee_sync (0.2.0):
     - Flutter
   - connectivity_plus (0.0.1):
     - Flutter
@@ -30,7 +30,7 @@ EXTERNAL SOURCES:
     :path: ".symlinks/plugins/sqflite_darwin/darwin"
 
 SPEC CHECKSUMS:
-  bee_sync: f6923fa19aac8b30b7da6200401c94e84c5f381b
+  bee_sync: 1b133149e316989641f6e476e13dc001c1ae06d2
   connectivity_plus: cb623214f4e1f6ef8fe7403d580fdad517d2f7dd
   Flutter: cabc95a1d2626b1b06e7179b784ebcf0c0cde467
   integration_test: 4a889634ef21a45d28d50d622cf412dc6d9f586e

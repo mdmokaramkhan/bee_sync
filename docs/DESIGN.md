@@ -255,17 +255,20 @@ Implemented in `android/src/main/kotlin/dev/beesync/bee_sync/`.
 
 ### 7.2 iOS
 
-Layered, most reliable first:
-1. **Background exit flush:** on `didEnterBackground`, call `beginBackgroundTask` and run the native uploader within the ~30 s grace period. This catches most events in practice.
-2. **`BGAppRefreshTask`** (`dev.beesync.refresh`): scheduled whenever the queue is non-empty when the app backgrounds.
-3. **`BGProcessingTask`** (`dev.beesync.processing`, `requiresNetworkConnectivity = true`): for large backlogs.
+Implemented in `ios/Classes/` (`BackgroundDelivery.swift`, `NativeUploader.swift`, `BeeSyncStore.swift`). Layered, most reliable first:
+1. **Background exit flush:** on `didEnterBackground`, call `beginBackgroundTask` and run the native uploader within the extra time iOS grants (about 30 s). This catches most events in practice. Dart also flushes when the app is hidden; the leases keep the two from sending the same events. Verified on the Simulator: after a server outage, the exit flush (`ios_bg_exit`) delivered all queued events and Dart's flush found nothing left.
+2. **`BGAppRefreshTask`** (`dev.beesync.refresh`): submitted when the queue is non-empty as the app backgrounds, and after each background run, with `earliestBeginDate` at the backoff end (default 15 min).
+3. **`BGProcessingTask`** (`dev.beesync.processing`, `requiresNetworkConnectivity = true`): for larger backlogs.
 
-Every task honors its `expirationHandler` by cancelling the in-flight request; the lease expiry handles cleanup.
+Uploads run on a private serial queue. Expiration handlers set a flag the uploader checks between batches, and the exit flush ends its background task right away. Leases release anything left in flight. Both tasks are cancelled once the queue drains. The uploader uses the system `libsqlite3` (the same library sqflite uses on iOS), `URLSession`, and a hand-written gzip wrapper, because Foundation only offers raw DEFLATE.
 
-User setup (documented, validated at init with a clear warning if missing):
-- `Info.plist`: `BGTaskSchedulerPermittedIdentifiers` = `[dev.beesync.refresh, dev.beesync.processing]`; `UIBackgroundModes` = `fetch`, `processing`.
-- Registration happens in the plugin's `register(with:)`, which runs during `didFinishLaunching` — satisfying Apple's "register before launch completes" rule.
-- iOS 13+.
+User setup (validated at startup; problems are logged as warnings through `BeeLogger`):
+- `Info.plist`: `BGTaskSchedulerPermittedIdentifiers` = `[dev.beesync.refresh, dev.beesync.processing]`; `UIBackgroundModes` = `fetch`, `processing`. Identifiers missing from Info.plist are not registered, because registering them would crash.
+- Registration happens in the plugin's `register(with:)`, which runs during `didFinishLaunching`, satisfying Apple's rule that handlers are registered before launch completes. Apps that register plugins later (for example scene-based setups) call `BeeSyncPlugin.registerBackgroundTasks()` from `didFinishLaunching`.
+- iOS 13+ for the plugin. The example app targets iOS 15 because of the installed Xcode.
+- The database stays at the default iOS file protection (`completeUntilFirstUserAuthentication`), so background runs can read it while the device is locked after the first unlock.
+
+**Not yet verified:** BGTaskScheduler doesn't run on the Simulator, so layers 2 and 3 need a device test. In Xcode, pause the app and run `e -l objc -- (void)[[BGTaskScheduler sharedScheduler] _simulateLaunchForTaskWithIdentifier:@"dev.beesync.refresh"]`, then resume.
 
 **Expectation to document loudly:** iOS schedules BG tasks at its discretion (app usage patterns, battery, Low Power Mode). They may run hours later or not at all if the user force-quits the app. Layer 1 is the workhorse.
 
@@ -382,7 +385,7 @@ Dependencies (kept minimal): `sqflite`, `path_provider`, `uuid`, `cryptography`,
 | Version | Scope | Exit criteria |
 |---|---|---|
 | **v0.1** — Dart core ✅ | API, sqflite store, claim protocol, batching, retry/backoff/bisection, `HttpTransport`, retention, consent, stats/logger, test harness | ≥ 90% line coverage of `core/` + `store/`; works on Android/iOS foreground only |
-| **v0.2** — Background (in progress: spec, Dart and Android done; iOS next) | `spec/` conformance suite; Android WorkManager uploader; iOS exit-flush + BGTasks; `meta`-synced transport config; `bg_log` | Example app delivers events queued before process death (Android ✅ verified on emulator) / backgrounding (iOS) without reopening |
+| **v0.2** — Background (spec, Dart, Android and iOS done; iOS BGTasks still need a device test) | `spec/` conformance suite; Android WorkManager uploader; iOS exit-flush + BGTasks; `meta`-synced transport config; `bg_log` | Example app delivers events queued before process death (Android ✅ emulator) / backgrounding (iOS ✅ exit flush on Simulator; BGTasks need a device) without reopening |
 | **v0.3** — Hardening | Encryption, inspector widget, per-event rejects, gzip, docs site, pub.dev publish | Pub points 160; README with server dedupe guide and iOS caveats |
 | **v1.0** | API freeze after real-app feedback | — |
 

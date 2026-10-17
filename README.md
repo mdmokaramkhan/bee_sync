@@ -4,7 +4,7 @@ Durable, offline-first event delivery for Flutter.
 
 Every event is written to an on-device SQLite queue **before** any network attempt, then delivered in batches (or right away, for high-priority events) with retries, backoff, consent controls and bounded storage. Delivery is **at-least-once**: each event carries a UUIDv7 `id`, and your server should dedupe on it.
 
-> **Status: 0.2.0-dev.** Delivery while the app runs, and background delivery on Android (WorkManager). Background delivery on iOS is in progress; encryption at rest comes in v0.3. See [docs/DESIGN.md](docs/DESIGN.md).
+> **Status: 0.2.0-dev.** Delivery while the app runs, plus native background delivery on Android (WorkManager) and iOS (background-exit upload and BGTaskScheduler). Encryption at rest comes in v0.3. See [docs/DESIGN.md](docs/DESIGN.md).
 
 ## Quick start
 
@@ -107,7 +107,28 @@ With `HttpTransport`, events queued when the app goes to the background are uplo
 
 **Android:** nothing to set up. WorkManager runs the upload once there's network, retries when the backoff ends, and checks every 15 minutes while events remain. One caveat: if the user **force-stops** the app, Android cancels all its jobs until the app is opened again.
 
-**iOS:** coming in the next step of 0.2.
+**iOS:** add this to your app's `Info.plist`. bee_sync logs a warning at startup if any of it is missing.
+
+```xml
+<key>BGTaskSchedulerPermittedIdentifiers</key>
+<array>
+  <string>dev.beesync.refresh</string>
+  <string>dev.beesync.processing</string>
+</array>
+<key>UIBackgroundModes</key>
+<array>
+  <string>fetch</string>
+  <string>processing</string>
+</array>
+```
+
+When the app goes to the background, bee_sync uses the extra time iOS grants to upload what's queued. This catches most events. It then schedules `BGAppRefreshTask` and `BGProcessingTask` for anything left. iOS decides when those run (it may be hours), and doesn't run them at all after the user force-quits the app. Anything still queued goes out on the next launch.
+
+If your app registers plugins after `didFinishLaunching` returns (some scene-based setups do), also call this in `application(_:didFinishLaunchingWithOptions:)`:
+
+```swift
+BeeSyncPlugin.registerBackgroundTasks()
+```
 
 What the background uploader did shows up in `getStats()` counters and in:
 
@@ -150,13 +171,19 @@ await harness.close();
 flutter test
 ```
 
+iOS tests (XCTest) run in the example app's `RunnerTests` target. Build once with `flutter build ios --simulator` first:
+
+```bash
+cd example/ios && xcodebuild test -workspace Runner.xcworkspace -scheme Runner -destination 'platform=iOS Simulator,name=iPhone 17'
+```
+
 Android tests (Robolectric) run through the example app's Gradle project:
 
 ```bash
 cd example/android && ./gradlew :bee_sync:testDebugUnitTest
 ```
 
-`spec/` holds the SQL, the uploader contract and the shared test cases. The Dart and Android test suites both check against it.
+`spec/` holds the SQL, the uploader contract and the shared test cases. The Dart, Android and iOS test suites all check against it.
 
 Try it end to end: run the local server, then point the example app at it (`10.0.2.2` is the host machine as seen from the Android emulator):
 

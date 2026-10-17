@@ -1,27 +1,33 @@
 import Flutter
 import UIKit
 
-/// Receives the database location from Dart and schedules background flushes.
-///
-/// Placeholder until the background-task uploader lands (v0.2 step 4): it
-/// stores the setup so a background launch can find the database, and
-/// schedules nothing yet.
+/// Dart -> native bridge (pigeons/messages.dart). Records where the database
+/// is, so a background launch can find it, and drives `BackgroundDelivery`.
 public class BeeSyncPlugin: NSObject, FlutterPlugin, BeeSyncHostApi {
-  static let databasePathKey = "dev.beesync.database_path"
-  static let enabledKey = "dev.beesync.background_enabled"
+  static let databasePathKey = BackgroundDelivery.databasePathKey
 
   public static func register(with registrar: FlutterPluginRegistrar) {
+    registerBackgroundTasks()
     BeeSyncHostApiSetup.setUp(binaryMessenger: registrar.messenger(), api: BeeSyncPlugin())
   }
 
-  func configure(setup: BackgroundSetup) throws -> [String] {
-    let defaults = UserDefaults.standard
-    defaults.set(setup.databasePath, forKey: Self.databasePathKey)
-    defaults.set(setup.enabled, forKey: Self.enabledKey)
-    return []
+  /// Registers the background task handlers. Called automatically when the
+  /// plugin is registered. If your app registers plugins after
+  /// `application(_:didFinishLaunchingWithOptions:)` returns (for example with
+  /// a scene-based setup), call this from `didFinishLaunching` yourself.
+  @objc public static func registerBackgroundTasks() {
+    BackgroundDelivery.shared.registerTasks()
   }
 
-  func scheduleBackgroundFlush() throws {}
+  func configure(setup: BackgroundSetup) throws -> [String] {
+    BackgroundDelivery.shared.configure(databasePath: setup.databasePath, enabled: setup.enabled)
+  }
 
-  func cancelBackgroundFlush() throws {}
+  func scheduleBackgroundFlush() throws {
+    BackgroundDelivery.shared.schedule()
+  }
+
+  func cancelBackgroundFlush() throws {
+    BackgroundDelivery.shared.cancel()
+  }
 }

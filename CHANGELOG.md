@@ -1,8 +1,16 @@
 ## 0.2.0 (unreleased)
 
-Native background delivery. In progress on `feat/v0.2-native-background-delivery`: Android is done, iOS is next.
+Native background delivery on Android and iOS. On `feat/v0.2-native-background-delivery`; iOS BGTasks still need a test on a real device.
 
 ### Added
+* **iOS background delivery.** A native uploader written in Swift (system `libsqlite3`, `URLSession`, hand-written gzip) follows `spec/uploader_contract.md`. It runs:
+  * when the app goes to the background, inside the extra time iOS grants (`beginBackgroundTask`);
+  * from `BGAppRefreshTask` (`dev.beesync.refresh`) and `BGProcessingTask` (`dev.beesync.processing`), scheduled at the backoff end and cancelled once the queue is empty.
+
+  Each run writes a summary to `bg_log`. Info.plist entries are checked at startup, and missing ones are reported as warnings. Verified on the Simulator: after a server outage, the exit upload delivered all queued events. BGTaskScheduler doesn't run on the Simulator, so the scheduled tasks are not verified yet.
+* `BeeSyncPlugin.registerBackgroundTasks()` (Swift), for apps that register plugins after launch.
+* iOS tests (XCTest, 11, in `example/ios/RunnerTests`): check the SQL against the spec, run every shared uploader case × 3 seeds through the real `URLSession` sender (with a `URLProtocol` stub as the server), and cover the wire format, gzip validity, gzip sending, Retry-After parsing, Info.plist checks and background-run logging.
+* Example app: the iOS background-task entries in Info.plist, and `NSAllowsLocalNetworking` so it can reach the local test server.
 * **Android background delivery.** A native uploader written in Kotlin follows `spec/uploader_contract.md`. It runs from WorkManager:
   * `bee_sync_flush`: once, as soon as there's network, after the app goes to the background with events queued.
   * `bee_sync_periodic`: every 15 minutes while events remain.
@@ -23,6 +31,7 @@ Native background delivery. In progress on `feat/v0.2-native-background-delivery
 * Testing: `FakeBackgroundScheduler`; `InMemoryEventStore(databasePath:)`; `InMemoryEventStore.addBackgroundLog`.
 
 ### Changed
+* iOS podspec: version 0.2.0 and a real summary; links `BackgroundTasks` and `sqlite3`.
 * The plugin's Android manifest now declares `INTERNET`.
 * Version is now `0.2.0-dev` in `pubspec.yaml`, `version.dart` and `BEE_SYNC_VERSION` (Kotlin), and appears in the `X-BeeSync-Sdk` header.
 * Android tests now use JUnit4 and Robolectric instead of the template's JUnit Platform and Mockito.

@@ -37,6 +37,7 @@ void main() {
       'create_events_ready_index': normalize(sql.createEventsReadyIndex),
       'create_meta': normalize(sql.createMeta),
       'create_bg_log': normalize(sql.createBgLog),
+      'create_counters': normalize(sql.createCounters),
     });
   });
 
@@ -49,6 +50,13 @@ void main() {
       'release': normalize(sql.release),
       'get_meta': normalize(sql.getMeta),
       'set_meta': normalize(sql.setMeta),
+      'count_events': normalize(sql.countEvents),
+      'ensure_counter': normalize(sql.ensureCounter),
+      'increment_counter': normalize(sql.incrementCounter),
+      'select_counters': normalize(sql.selectCounters),
+      'insert_bg_log': normalize(sql.insertBgLog),
+      'trim_bg_log': normalize(sql.trimBgLog),
+      'select_bg_log': normalize(sql.selectBgLog),
     });
   });
 }

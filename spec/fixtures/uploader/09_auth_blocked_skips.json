@@ -1,0 +1,35 @@
+{
+  "description": "An automatic run does nothing while auth_blocked is set.",
+  "now": 1760000000000,
+  "meta": {
+    "auth_blocked": "1"
+  },
+  "events": [
+    {
+      "id": "a",
+      "name": "evt",
+      "properties": {
+        "k": "a"
+      },
+      "priority": "normal",
+      "created_at": 1759999940000,
+      "attempts": 0,
+      "next_attempt_at": 0,
+      "lease_owner": null,
+      "lease_until": null
+    }
+  ],
+  "responses": [],
+  "expect": {
+    "status": "skipped",
+    "requests": [],
+    "remaining": [
+      {
+        "id": "a",
+        "attempts": 0,
+        "next_attempt_at": 0
+      }
+    ],
+    "counters": {}
+  }
+}

@@ -15,6 +15,7 @@ import 'dart:math';
 import 'bee_sync.dart';
 import 'src/store/memory_store.dart';
 
+export 'src/platform/background.dart';
 export 'src/store/event_store.dart';
 export 'src/store/memory_store.dart' show InMemoryEventStore;
 
@@ -48,6 +49,41 @@ class FakeTransport implements EventTransport {
     if (_script.isNotEmpty) return _script.removeFirst()(batch);
     return fallback?.call(batch) ?? _default;
   }
+}
+
+/// [BackgroundScheduler] that records calls instead of talking to native code.
+class FakeBackgroundScheduler implements BackgroundScheduler {
+  FakeBackgroundScheduler({
+    this.warnings = const [],
+    this.failConfigure = false,
+  });
+
+  final List<String> warnings;
+
+  /// Simulates a platform without the native plugin.
+  final bool failConfigure;
+
+  String? databasePath;
+  bool? enabled;
+  int scheduled = 0;
+  int cancelled = 0;
+
+  @override
+  Future<List<String>> configure({
+    required String databasePath,
+    required bool enabled,
+  }) async {
+    if (failConfigure) throw StateError('No native plugin');
+    this.databasePath = databasePath;
+    this.enabled = enabled;
+    return warnings;
+  }
+
+  @override
+  Future<void> schedule() async => scheduled++;
+
+  @override
+  Future<void> cancel() async => cancelled++;
 }
 
 /// [PlatformSignals] driven by the test.

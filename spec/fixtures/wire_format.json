@@ -1,0 +1,55 @@
+{
+  "description": "Request body for one batch. batch_id and sent_at are inputs here; uploaders generate them.",
+  "batch_id": "6f1c1a52-2f4e-4f8a-9d38-2b7c1d3e5a10",
+  "sent_at": 1760000000000,
+  "events": [
+    {
+      "id": "0199a3c0-0000-7000-8000-000000000001",
+      "name": "purchase",
+      "payload": "{\"order_id\":\"A1\",\"amount\":12.5}",
+      "priority": 1,
+      "created_at": 1759999995000,
+      "attempts": 0
+    },
+    {
+      "id": "0199a3c0-0000-7000-8000-000000000002",
+      "name": "screen_view",
+      "payload": "{\"screen\":\"home\",\"tags\":[\"a\",\"b\"],\"meta\":null}",
+      "priority": 0,
+      "created_at": 1759999996000,
+      "attempts": 2
+    }
+  ],
+  "expected_body": {
+    "batch_id": "6f1c1a52-2f4e-4f8a-9d38-2b7c1d3e5a10",
+    "sent_at": 1760000000000,
+    "events": [
+      {
+        "id": "0199a3c0-0000-7000-8000-000000000001",
+        "name": "purchase",
+        "timestamp": 1759999995000,
+        "priority": "immediate",
+        "attempt": 1,
+        "properties": {
+          "order_id": "A1",
+          "amount": 12.5
+        }
+      },
+      {
+        "id": "0199a3c0-0000-7000-8000-000000000002",
+        "name": "screen_view",
+        "timestamp": 1759999996000,
+        "priority": "normal",
+        "attempt": 3,
+        "properties": {
+          "screen": "home",
+          "tags": [
+            "a",
+            "b"
+          ],
+          "meta": null
+        }
+      }
+    ]
+  }
+}

@@ -1,3 +1,4 @@
+import 'dart:convert';
 import 'dart:typed_data';
 
 import 'package:sqflite/sqflite.dart';
@@ -21,6 +22,9 @@ class SqfliteEventStore implements EventStore {
   final DatabaseFactory _factory;
   Database? _db;
 
+  @override
+  String? get databasePath => path == inMemoryDatabasePath ? null : path;
+
   Database get _database {
     final db = _db;
     if (db == null) throw StateError('SqfliteEventStore is not open');
@@ -43,8 +47,12 @@ class SqfliteEventStore implements EventStore {
             ..execute(sql.createEvents)
             ..execute(sql.createEventsReadyIndex)
             ..execute(sql.createMeta)
-            ..execute(sql.createBgLog);
+            ..execute(sql.createBgLog)
+            ..execute(sql.createCounters);
           await batch.commit(noResult: true);
+        },
+        onUpgrade: (db, oldVersion, newVersion) async {
+          if (oldVersion < 2) await _migrateV1ToV2(db);
         },
         onDowngrade: (db, oldVersion, newVersion) {
           throw BeeSyncException(
@@ -99,13 +107,22 @@ class SqfliteEventStore implements EventStore {
   }
 
   @override
-  Future<void> deleteLeased(String owner, Iterable<String> ids) async {
+  Future<void> deleteLeased(
+    String owner,
+    Iterable<String> ids, {
+    Map<String, int> counters = const {},
+  }) async {
     final list = ids.toList();
-    if (list.isEmpty) return;
-    await _database.rawDelete(sql.expandIds(sql.deleteLeased, list.length), [
-      owner,
-      ...list,
-    ]);
+    if (list.isEmpty && counters.isEmpty) return;
+    await _database.transaction((txn) async {
+      if (list.isNotEmpty) {
+        await txn.rawDelete(sql.expandIds(sql.deleteLeased, list.length), [
+          owner,
+          ...list,
+        ]);
+      }
+      await _increment(txn, counters);
+    });
   }
 
   @override
@@ -202,6 +219,72 @@ class SqfliteEventStore implements EventStore {
   @override
   Future<void> setMeta(String key, String value) async {
     await _database.rawInsert(sql.setMeta, [key, value]);
+  }
+
+  @override
+  Future<void> deleteMeta(String key) async {
+    await _database.rawDelete(sql.deleteMeta, [key]);
+  }
+
+  @override
+  Future<void> incrementCounters(Map<String, int> deltas) async {
+    if (deltas.isEmpty) return;
+    await _database.transaction((txn) => _increment(txn, deltas));
+  }
+
+  @override
+  Future<Map<String, int>> counters() async {
+    final rows = await _database.rawQuery(sql.selectCounters);
+    return {for (final r in rows) r['key']! as String: r['value']! as int};
+  }
+
+  @override
+  Future<List<BackgroundLogEntry>> backgroundLog(int limit) async {
+    final rows = await _database.rawQuery(sql.selectBgLog, [limit]);
+    return [
+      for (final r in rows)
+        BackgroundLogEntry(
+          at: DateTime.fromMillisecondsSinceEpoch(r['at']! as int, isUtc: true),
+          source: r['source']! as String,
+          level: r['level']! as String,
+          message: r['message']! as String,
+        ),
+    ];
+  }
+
+  static Future<void> _increment(
+    DatabaseExecutor db,
+    Map<String, int> deltas,
+  ) async {
+    for (final e in deltas.entries) {
+      if (e.value == 0) continue;
+      await db.rawInsert(sql.ensureCounter, [e.key]);
+      await db.rawUpdate(sql.incrementCounter, [e.value, e.key]);
+    }
+  }
+
+  /// v1 kept counters as JSON in `meta.counters`; v2 has a table that every
+  /// uploader can increment atomically.
+  static Future<void> _migrateV1ToV2(Database db) async {
+    await db.execute(sql.createCounters);
+    final rows = await db.rawQuery(sql.getMeta, ['counters']);
+    if (rows.isEmpty) return;
+    final deltas = <String, int>{};
+    try {
+      final json = jsonDecode(rows.first['value']! as String) as Map;
+      final sent = json['sent'];
+      if (sent is int) deltas['sent'] = sent;
+      final dropped = json['dropped'];
+      if (dropped is Map) {
+        for (final e in dropped.entries) {
+          if (e.value is int) deltas['dropped.${e.key}'] = e.value as int;
+        }
+      }
+    } on Object {
+      // Corrupt counters are not worth failing an upgrade for.
+    }
+    await _increment(db, deltas);
+    await db.rawDelete(sql.deleteMeta, ['counters']);
   }
 
   static Future<void> _deleteIds(DatabaseExecutor db, List<String> ids) async {

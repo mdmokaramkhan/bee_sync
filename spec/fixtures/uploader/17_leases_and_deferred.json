@@ -1,0 +1,75 @@
+{
+  "description": "Live foreign leases and deferred rows are skipped; expired leases are reclaimed.",
+  "now": 1760000000000,
+  "events": [
+    {
+      "id": "live",
+      "name": "evt",
+      "properties": {
+        "k": "live"
+      },
+      "priority": "normal",
+      "created_at": 1759999940000,
+      "attempts": 0,
+      "next_attempt_at": 0,
+      "lease_owner": "other:1",
+      "lease_until": 1760000001000
+    },
+    {
+      "id": "expired",
+      "name": "evt",
+      "properties": {
+        "k": "expired"
+      },
+      "priority": "normal",
+      "created_at": 1759999940000,
+      "attempts": 0,
+      "next_attempt_at": 0,
+      "lease_owner": "other:1",
+      "lease_until": 1759999999999
+    },
+    {
+      "id": "deferred",
+      "name": "evt",
+      "properties": {
+        "k": "deferred"
+      },
+      "priority": "normal",
+      "created_at": 1759999940000,
+      "attempts": 0,
+      "next_attempt_at": 1760000000001,
+      "lease_owner": null,
+      "lease_until": null
+    }
+  ],
+  "responses": [
+    {
+      "status": 200,
+      "headers": {},
+      "body": ""
+    }
+  ],
+  "expect": {
+    "status": "drained",
+    "requests": [
+      [
+        "expired"
+      ]
+    ],
+    "remaining": [
+      {
+        "id": "live",
+        "attempts": 0,
+        "next_attempt_at": 0
+      },
+      {
+        "id": "deferred",
+        "attempts": 0,
+        "next_attempt_at": 1760000000001
+      }
+    ],
+    "counters": {
+      "sent": 1
+    }
+  }
+}

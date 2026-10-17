@@ -1,0 +1,52 @@
+{
+  "description": "A 2xx deletes the batch and counts it as sent.",
+  "now": 1760000000000,
+  "events": [
+    {
+      "id": "a",
+      "name": "evt",
+      "properties": {
+        "k": "a"
+      },
+      "priority": "normal",
+      "created_at": 1759999940000,
+      "attempts": 0,
+      "next_attempt_at": 0,
+      "lease_owner": null,
+      "lease_until": null
+    },
+    {
+      "id": "b",
+      "name": "evt",
+      "properties": {
+        "k": "b"
+      },
+      "priority": "normal",
+      "created_at": 1759999940000,
+      "attempts": 0,
+      "next_attempt_at": 0,
+      "lease_owner": null,
+      "lease_until": null
+    }
+  ],
+  "responses": [
+    {
+      "status": 200,
+      "headers": {},
+      "body": ""
+    }
+  ],
+  "expect": {
+    "status": "drained",
+    "requests": [
+      [
+        "a",
+        "b"
+      ]
+    ],
+    "remaining": [],
+    "counters": {
+      "sent": 2
+    }
+  }
+}

@@ -190,11 +190,27 @@ void runStoreContract(String label, Future<EventStore> Function() create) {
       expect(await claimIds(b), ['1']);
     });
 
-    test('meta values can be set and overwritten', () async {
+    test('meta values can be set, overwritten and deleted', () async {
       expect(await store.getMeta('k'), isNull);
       await store.setMeta('k', 'v1');
       await store.setMeta('k', 'v2');
       expect(await store.getMeta('k'), 'v2');
+      await store.deleteMeta('k');
+      expect(await store.getMeta('k'), isNull);
+    });
+
+    test('counters accumulate, including through deleteLeased', () async {
+      expect(await store.counters(), isEmpty);
+      await store.incrementCounters({'sent': 2, 'dropped.expired': 1});
+      await add('1');
+      await claimIds(a);
+      await store.deleteLeased(a, ['1'], counters: {'sent': 1, 'zero': 0});
+      expect(await store.counters(), {'sent': 3, 'dropped.expired': 1});
+      expect((await store.totals(0)).total, 0);
+    });
+
+    test('background log starts empty', () async {
+      expect(await store.backgroundLog(10), isEmpty);
     });
   });
 }

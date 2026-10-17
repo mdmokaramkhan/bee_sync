@@ -54,7 +54,7 @@ Delivery guarantee: **at-least-once**. Every event carries a client-generated UU
 └──────────────────────────────────────────────────────────────────────────────┘
 ```
 
-Two independent uploaders (Dart and native) operate on **one SQLite file**. Correctness comes from a shared schema and a lease-based claim protocol (§5), not from coordination messages.
+Two independent uploaders (Dart and native) operate on **one SQLite file**. Correctness comes from a shared schema and a lease-based claim protocol (§5), not from coordination messages. All shared state (consent, global backoff, auth block, settings, counters) lives in the database, so whichever uploader runs next sees it. The step-by-step algorithm every uploader follows is in [`spec/uploader_contract.md`](../spec/uploader_contract.md).
 
 ### 2.1 Key decisions
 
@@ -146,7 +146,7 @@ class PermanentFailure extends TransportResult { final String reason; }
 
 ## 4. Data model
 
-Single file: `<app support dir>/bee_sync/bee_sync.db`. Schema version tracked in `PRAGMA user_version`. Both runtimes refuse to operate on a version newer than they understand (logged, no crash).
+Single file: `<app support dir>/bee_sync/bee_sync.db`. Schema version tracked in `PRAGMA user_version` (currently 2). Only Dart creates or migrates the file; Dart refuses a newer version than it knows, and native uploaders run only on exactly the version they were built for (otherwise they wait for the app's next launch to migrate).
 
 ```sql
 CREATE TABLE events (
@@ -166,8 +166,12 @@ CREATE TABLE events (
 CREATE INDEX events_ready ON events (lease_owner, priority DESC, seq);
 
 CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
--- keys: transport_config (JSON), consent_state, flush_not_before (global backoff),
---       counters (JSON: sent, dropped_by_reason), wrapped_data_key
+-- keys: consent_state, transport_config (JSON), delivery_config (JSON),
+--       flush_not_before (global backoff), auth_blocked; v0.3: wrapped_data_key
+-- See spec/uploader_contract.md §1 for formats and who writes each key.
+
+CREATE TABLE counters (key TEXT PRIMARY KEY, value INTEGER NOT NULL DEFAULT 0);
+-- schema v2: "sent", "dropped.<reason>"; incremented atomically by every uploader
 
 CREATE TABLE bg_log (                               -- ring buffer, capped at 200 rows
   seq INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -373,7 +377,7 @@ Dependencies (kept minimal): `sqflite`, `path_provider`, `uuid`, `cryptography`,
 | Version | Scope | Exit criteria |
 |---|---|---|
 | **v0.1** — Dart core ✅ | API, sqflite store, claim protocol, batching, retry/backoff/bisection, `HttpTransport`, retention, consent, stats/logger, test harness | ≥ 90% line coverage of `core/` + `store/`; works on Android/iOS foreground only |
-| **v0.2** — Background | `spec/` conformance suite; Android WorkManager uploader; iOS exit-flush + BGTasks; `meta`-synced transport config; `bg_log` | Example app delivers events queued before force-stop (Android) / backgrounding (iOS) without reopening |
+| **v0.2** — Background (in progress: spec + Dart side done) | `spec/` conformance suite; Android WorkManager uploader; iOS exit-flush + BGTasks; `meta`-synced transport config; `bg_log` | Example app delivers events queued before force-stop (Android) / backgrounding (iOS) without reopening |
 | **v0.3** — Hardening | Encryption, inspector widget, per-event rejects, gzip, docs site, pub.dev publish | Pub points 160; README with server dedupe guide and iOS caveats |
 | **v1.0** | API freeze after real-app feedback | — |
 

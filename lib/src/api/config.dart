@@ -12,17 +12,19 @@ class BeeSyncConfig {
     this.retry = const RetryPolicy(),
     this.retention = const RetentionPolicy(),
     this.consent = const ConsentConfig(),
+    this.background = const BackgroundConfig(),
     this.maxEventBytes = 32 * 1024,
     this.leaseDuration = const Duration(seconds: 60),
     this.logger = const BeeLogger.console(),
   });
 
-  /// Where events go. Background delivery (v0.2) requires `HttpTransport`.
+  /// Where events go. Background delivery requires `HttpTransport`.
   final EventTransport transport;
   final BatchingPolicy batching;
   final RetryPolicy retry;
   final RetentionPolicy retention;
   final ConsentConfig consent;
+  final BackgroundConfig background;
 
   /// Largest encoded properties payload accepted by `track()`.
   final int maxEventBytes;
@@ -129,4 +131,14 @@ class ConsentConfig {
   /// Used on first launch only; afterwards the persisted state wins.
   final ConsentState initial;
   final UnknownConsentBehavior whileUnknown;
+}
+
+/// Native background delivery (docs/DESIGN.md §7).
+class BackgroundConfig {
+  const BackgroundConfig({this.enabled = true});
+
+  /// Upload from Android WorkManager and iOS background tasks when the app is
+  /// not running. Only takes effect with `HttpTransport`; custom transports
+  /// cannot run without Dart. iOS also needs Info.plist entries (see README).
+  final bool enabled;
 }

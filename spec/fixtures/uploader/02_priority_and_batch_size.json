@@ -1,0 +1,76 @@
+{
+  "description": "Immediate events go first, then FIFO; batches hold at most max_batch_size events.",
+  "now": 1760000000000,
+  "delivery_config": {
+    "max_batch_size": 2
+  },
+  "events": [
+    {
+      "id": "n1",
+      "name": "evt",
+      "properties": {
+        "k": "n1"
+      },
+      "priority": "normal",
+      "created_at": 1759999940000,
+      "attempts": 0,
+      "next_attempt_at": 0,
+      "lease_owner": null,
+      "lease_until": null
+    },
+    {
+      "id": "i1",
+      "name": "evt",
+      "properties": {
+        "k": "i1"
+      },
+      "priority": "immediate",
+      "created_at": 1759999940000,
+      "attempts": 0,
+      "next_attempt_at": 0,
+      "lease_owner": null,
+      "lease_until": null
+    },
+    {
+      "id": "n2",
+      "name": "evt",
+      "properties": {
+        "k": "n2"
+      },
+      "priority": "normal",
+      "created_at": 1759999940000,
+      "attempts": 0,
+      "next_attempt_at": 0,
+      "lease_owner": null,
+      "lease_until": null
+    }
+  ],
+  "responses": [
+    {
+      "status": 200,
+      "headers": {},
+      "body": ""
+    },
+    {
+      "status": 200,
+      "headers": {},
+      "body": ""
+    }
+  ],
+  "expect": {
+    "status": "drained",
+    "requests": [
+      [
+        "i1",
+        "n1"
+      ],
+      [
+        "n2"
+      ]
+    ],
+    "remaining": [],
+    "counters": {
+      "sent": 3
+    }
+  }
+}

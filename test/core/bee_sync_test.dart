@@ -1,11 +1,15 @@
 import 'dart:async';
+import 'dart:convert';
 import 'dart:math';
 import 'dart:typed_data';
 
 import 'package:bee_sync/bee_sync.dart';
 import 'package:bee_sync/testing.dart';
+import 'package:clock/clock.dart';
 import 'package:fake_async/fake_async.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:http/http.dart' as http;
+import 'package:http/testing.dart';
 
 /// Drives a real [BeeSync] on fake time with an in-memory store.
 class Rig {
@@ -25,11 +29,13 @@ class Rig {
     RetentionPolicy retention = const RetentionPolicy(),
     ConsentConfig consent = const ConsentConfig(),
     int maxEventBytes = 32 * 1024,
+    EventTransport? transportOverride,
+    BackgroundScheduler? background,
   }) {
     bee = wait(
       BeeSync.initialize(
         BeeSyncConfig(
-          transport: transport,
+          transport: transportOverride ?? transport,
           batching: batching,
           retry: retry,
           retention: retention,
@@ -40,6 +46,7 @@ class Rig {
         store: store,
         signals: signals,
         random: Random(0),
+        background: background,
       ),
     );
     bee.events.listen(events.add);
@@ -520,6 +527,197 @@ void main() {
         expect(second.stats.sent, 1);
         second.close();
       });
+    });
+  });
+
+  group('background delivery', () {
+    HttpTransport okHttp() => HttpTransport(
+      endpoint: Uri.parse('https://example.test/events'),
+      client: MockClient((_) async => http.Response('', 200)),
+    );
+    HttpTransport downHttp() => HttpTransport(
+      endpoint: Uri.parse('https://example.test/events'),
+      client: MockClient((_) async => http.Response('', 503)),
+    );
+
+    void bgTest(
+      String description,
+      void Function(Rig rig, FakeBackgroundScheduler bg) body, {
+      FakeBackgroundScheduler? scheduler,
+      String? databasePath = '/data/bee_sync.db',
+    }) {
+      test(description, () {
+        fakeAsync((async) {
+          final bg = scheduler ?? FakeBackgroundScheduler();
+          final rig = Rig(
+            async,
+            store: InMemoryEventStore(databasePath: databasePath),
+          );
+          try {
+            body(rig, bg);
+          } finally {
+            rig.close();
+          }
+        });
+      });
+    }
+
+    bgTest('configures native with the database path', (rig, bg) {
+      rig.start(transportOverride: okHttp(), background: bg);
+      expect(bg.databasePath, '/data/bee_sync.db');
+      expect(bg.enabled, isTrue);
+      expect(rig.bee.backgroundEnabled, isTrue);
+      expect(bg.cancelled, 0);
+    });
+
+    bgTest('schedules on backgrounding while events remain', (rig, bg) {
+      rig.start(transportOverride: downHttp(), background: bg);
+      rig.track('a');
+      rig.signals.background();
+      rig.elapse(const Duration(seconds: 1));
+      expect(bg.scheduled, 1);
+      expect(bg.cancelled, 0);
+    });
+
+    bgTest('cancels on backgrounding once the queue is empty', (rig, bg) {
+      rig.start(transportOverride: okHttp(), background: bg);
+      rig.track('a');
+      rig.signals.background();
+      rig.elapse(const Duration(seconds: 1));
+      expect(bg.scheduled, 0);
+      expect(bg.cancelled, 1);
+      expect(rig.stats.sent, 1);
+    });
+
+    bgTest('is off with a custom transport, which native cannot replay', (
+      rig,
+      bg,
+    ) {
+      rig.start(background: bg); // FakeTransport
+      expect(bg.enabled, isFalse);
+      expect(bg.cancelled, 1);
+      expect(rig.bee.backgroundEnabled, isFalse);
+      expect(rig.wait(rig.store.getMeta(MetaKeys.transportConfig)), isNull);
+    });
+
+    bgTest('is off when the store is not file-backed', (rig, bg) {
+      rig.start(transportOverride: okHttp(), background: bg);
+      expect(bg.enabled, isFalse);
+    }, databasePath: null);
+
+    bgTest('is off when disabled in config', (rig, bg) {
+      rig.bee = rig.wait(
+        BeeSync.initialize(
+          BeeSyncConfig(
+            transport: okHttp(),
+            background: const BackgroundConfig(enabled: false),
+            logger: const BeeLogger.silent(),
+          ),
+          store: rig.store,
+          signals: rig.signals,
+          background: bg,
+        ),
+      );
+      expect(bg.enabled, isFalse);
+      expect(bg.cancelled, 1);
+    });
+
+    bgTest(
+      'a missing native plugin leaves foreground delivery working',
+      (rig, bg) {
+        rig.start(transportOverride: okHttp(), background: bg);
+        expect(rig.bee.backgroundEnabled, isFalse);
+        rig.track('a');
+        rig.wait(rig.bee.flush());
+        expect(rig.stats.sent, 1);
+      },
+      scheduler: FakeBackgroundScheduler(failConfigure: true),
+    );
+
+    bgTest('mirrors transport and delivery settings for native', (rig, bg) {
+      rig.start(
+        transportOverride: okHttp(),
+        background: bg,
+        batching: const BatchingPolicy(maxBatchSize: 7),
+      );
+      final transport = jsonDecode(
+        rig.wait(rig.store.getMeta(MetaKeys.transportConfig))!,
+      );
+      expect((transport as Map)['endpoint'], 'https://example.test/events');
+      final delivery = jsonDecode(
+        rig.wait(rig.store.getMeta(MetaKeys.deliveryConfig))!,
+      );
+      expect((delivery as Map)['max_batch_size'], 7);
+
+      rig.wait(rig.bee.setHeaders({'Authorization': 'Bearer new'}));
+      final updated = jsonDecode(
+        rig.wait(rig.store.getMeta(MetaKeys.transportConfig))!,
+      );
+      expect((updated as Map)['headers'], {'Authorization': 'Bearer new'});
+    });
+  });
+
+  group('state shared with native uploaders', () {
+    rigTest('stats include counters written by native code', (rig) {
+      rig.start();
+      rig.wait(
+        rig.store.incrementCounters({
+          CounterKeys.sent: 5,
+          CounterKeys.dropped(DropReason.maxAttempts): 2,
+        }),
+      );
+      final s = rig.stats;
+      expect(s.sent, 5);
+      expect(s.dropped, {DropReason.maxAttempts: 2});
+    });
+
+    rigTest('an auth block set by native pauses automatic flushes', (rig) {
+      rig.start(
+        batching: const BatchingPolicy(flushInterval: Duration(seconds: 10)),
+      );
+      rig.wait(rig.store.setMeta(MetaKeys.authBlocked, '1'));
+      rig.track('a', priority: Priority.immediate);
+      rig.elapse(const Duration(minutes: 1));
+      expect(rig.transport.batches, isEmpty);
+
+      rig.wait(rig.bee.flush()); // manual flush clears it
+      expect(rig.sentNames, ['a']);
+      expect(rig.wait(rig.store.getMeta(MetaKeys.authBlocked)), '0');
+    });
+
+    rigTest('a backoff set by native holds automatic flushes', (rig) {
+      rig.start(
+        batching: const BatchingPolicy(flushInterval: Duration(seconds: 10)),
+      );
+      final until = clock.now().add(const Duration(minutes: 5));
+      rig.wait(
+        rig.store.setMeta(
+          MetaKeys.flushNotBefore,
+          '${until.millisecondsSinceEpoch}',
+        ),
+      );
+      rig.track('a', priority: Priority.immediate);
+      rig.elapse(const Duration(minutes: 4));
+      expect(rig.transport.batches, isEmpty);
+      expect(rig.stats.backoffUntil, isNotNull);
+      rig.elapse(const Duration(minutes: 2));
+      expect(rig.sentNames, ['a']);
+    });
+
+    rigTest('backgroundLog returns native entries, newest first', (rig) {
+      rig.start();
+      for (final m in ['one', 'two']) {
+        rig.store.addBackgroundLog(
+          BackgroundLogEntry(
+            at: DateTime.utc(2026),
+            source: 'android_worker',
+            level: 'info',
+            message: m,
+          ),
+        );
+      }
+      final log = rig.wait(rig.bee.backgroundLog(limit: 1));
+      expect([for (final e in log) e.message], ['two']);
     });
   });
 

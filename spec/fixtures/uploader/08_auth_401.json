@@ -1,0 +1,45 @@
+{
+  "description": "401 releases without counting an attempt and sets auth_blocked.",
+  "now": 1760000000000,
+  "events": [
+    {
+      "id": "a",
+      "name": "evt",
+      "properties": {
+        "k": "a"
+      },
+      "priority": "normal",
+      "created_at": 1759999940000,
+      "attempts": 0,
+      "next_attempt_at": 0,
+      "lease_owner": null,
+      "lease_until": null
+    }
+  ],
+  "responses": [
+    {
+      "status": 401,
+      "headers": {},
+      "body": ""
+    }
+  ],
+  "expect": {
+    "status": "authBlocked",
+    "requests": [
+      [
+        "a"
+      ]
+    ],
+    "remaining": [
+      {
+        "id": "a",
+        "attempts": 0,
+        "next_attempt_at": 0
+      }
+    ],
+    "counters": {},
+    "meta": {
+      "auth_blocked": "1"
+    }
+  }
+}

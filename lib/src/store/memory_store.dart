@@ -7,8 +7,17 @@ import 'event_store.dart';
 ///
 /// Used by tests and `BeeSyncTestHarness`. Nothing survives the process.
 class InMemoryEventStore implements EventStore {
+  /// [databasePath] only pretends to be file-backed, so tests can exercise
+  /// background scheduling.
+  InMemoryEventStore({this.databasePath});
+
+  @override
+  final String? databasePath;
+
   final List<_Row> _rows = [];
   final Map<String, String> _meta = {};
+  final Map<String, int> _counters = {};
+  final List<BackgroundLogEntry> _bgLog = [];
   int _nextSeq = 1;
 
   @override
@@ -64,9 +73,14 @@ class InMemoryEventStore implements EventStore {
   }
 
   @override
-  Future<void> deleteLeased(String owner, Iterable<String> ids) async {
+  Future<void> deleteLeased(
+    String owner,
+    Iterable<String> ids, {
+    Map<String, int> counters = const {},
+  }) async {
     final set = ids.toSet();
     _rows.removeWhere((r) => r.leaseOwner == owner && set.contains(r.id));
+    await incrementCounters(counters);
   }
 
   @override
@@ -158,6 +172,27 @@ class InMemoryEventStore implements EventStore {
 
   @override
   Future<void> setMeta(String key, String value) async => _meta[key] = value;
+
+  @override
+  Future<void> deleteMeta(String key) async => _meta.remove(key);
+
+  @override
+  Future<void> incrementCounters(Map<String, int> deltas) async {
+    for (final e in deltas.entries) {
+      if (e.value == 0) continue;
+      _counters[e.key] = (_counters[e.key] ?? 0) + e.value;
+    }
+  }
+
+  @override
+  Future<Map<String, int>> counters() async => Map.of(_counters);
+
+  @override
+  Future<List<BackgroundLogEntry>> backgroundLog(int limit) async =>
+      _bgLog.reversed.take(limit).toList();
+
+  /// Simulates a native uploader writing to `bg_log`.
+  void addBackgroundLog(BackgroundLogEntry entry) => _bgLog.add(entry);
 
   Iterable<_Row> _held(String owner, Iterable<String> ids) {
     final set = ids.toSet();

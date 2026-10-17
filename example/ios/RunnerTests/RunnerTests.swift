@@ -1,27 +1,16 @@
-import Flutter
-import UIKit
 import XCTest
-
 
 @testable import bee_sync
 
-// This demonstrates a simple unit test of the Swift portion of this plugin's implementation.
-//
-// See https://developer.apple.com/documentation/xctest for more information about using XCTest.
-
+// Native uploader tests against spec/fixtures land with the iOS uploader
+// (v0.2 step 4).
 class RunnerTests: XCTestCase {
-
-  func testGetPlatformVersion() {
+  func testConfigureStoresDatabasePath() throws {
     let plugin = BeeSyncPlugin()
-
-    let call = FlutterMethodCall(methodName: "getPlatformVersion", arguments: [])
-
-    let resultExpectation = expectation(description: "result block must be called.")
-    plugin.handle(call) { result in
-      XCTAssertEqual(result as! String, "iOS " + UIDevice.current.systemVersion)
-      resultExpectation.fulfill()
-    }
-    waitForExpectations(timeout: 1)
+    let warnings = try plugin.configure(
+      setup: BackgroundSetup(databasePath: "/tmp/bee_sync.db", enabled: true))
+    XCTAssertEqual(warnings, [])
+    XCTAssertEqual(
+      UserDefaults.standard.string(forKey: BeeSyncPlugin.databasePathKey), "/tmp/bee_sync.db")
   }
-
 }

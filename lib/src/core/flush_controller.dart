@@ -4,13 +4,14 @@ import 'dart:math';
 import 'package:clock/clock.dart';
 import 'package:uuid/uuid.dart';
 
-import '../api/config.dart';
 import '../api/models.dart';
 import '../diagnostics/logger.dart';
 import '../store/event_store.dart';
 import '../transport/event_transport.dart';
+import 'delivery_settings.dart';
 
-/// Receives the effects of a flush.
+/// Receives the effects of a flush. Counters are already updated in the
+/// store when these are called.
 abstract interface class FlushListener {
   void onDelivered(List<String> ids);
 
@@ -27,7 +28,8 @@ enum FlushStatus {
   /// Credentials were refused; waiting for new headers.
   authBlocked,
 
-  /// The flush did not run, or was stopped early (consent, shutdown).
+  /// The flush did not run (consent, auth block, backoff) or was stopped
+  /// early (shutdown); see [FlushResult.error].
   skipped,
 }
 
@@ -44,6 +46,9 @@ class FlushResult {
   /// Events acknowledged by the server during this flush.
   final int delivered;
   final DateTime? retryAt;
+
+  /// For [FlushStatus.skipped]: `consent`, `auth` or `backoff` when a gate
+  /// stopped the run. Otherwise the failure that stopped it.
   final String? error;
 
   @override
@@ -52,47 +57,94 @@ class FlushResult {
       '${error == null ? '' : ', error: $error'})';
 }
 
-/// One uploader run of the claim protocol (docs/DESIGN.md §5): claim a
-/// batch, send it, then delete, back off or release, until nothing is ready.
+/// One uploader run, exactly as specified in spec/uploader_contract.md §2–3:
+/// check the meta gates, then claim, send and delete / back off / release
+/// until nothing is ready. The native uploaders implement the same steps.
 class FlushController {
   FlushController({
     required EventStore store,
     required EventTransport transport,
-    required BeeSyncConfig config,
+    required DeliverySettings settings,
     required String owner,
     required Random random,
-    required FlushListener listener,
+    FlushListener? listener,
+    BeeLogger logger = const BeeLogger.silent(),
   }) : _store = store,
        _transport = transport,
-       _config = config,
+       _settings = settings,
        _owner = owner,
        _random = random,
-       _listener = listener;
+       _listener = listener,
+       _log = logger;
 
   final EventStore _store;
   final EventTransport _transport;
-  final BeeSyncConfig _config;
+  final DeliverySettings _settings;
   final String _owner;
   final Random _random;
-  final FlushListener _listener;
+  final FlushListener? _listener;
+  final BeeLogger _log;
   static const _uuid = Uuid();
 
-  BeeLogger get _log => _config.logger;
-
-  /// Runs until drained or stopped. [shouldContinue] is checked before each
-  /// batch so consent changes and shutdown take effect promptly.
+  /// Runs one upload pass.
+  ///
+  /// A [manual] run ignores the global backoff and the auth block (the app
+  /// asked explicitly) but never consent. [shouldContinue] is checked before
+  /// each batch so consent changes and shutdown take effect promptly.
   Future<FlushResult> run({
+    bool manual = false,
     bool immediateOnly = false,
-    required bool Function() shouldContinue,
+    bool Function()? shouldContinue,
   }) async {
+    final keepGoing = shouldContinue ?? () => true;
+    if (await _store.getMeta(MetaKeys.consent) != ConsentState.granted.name) {
+      return const FlushResult(FlushStatus.skipped, error: 'consent');
+    }
+    final notBefore =
+        int.tryParse(await _store.getMeta(MetaKeys.flushNotBefore) ?? '') ?? 0;
+    if (!manual) {
+      if (await _store.getMeta(MetaKeys.authBlocked) == '1') {
+        return const FlushResult(FlushStatus.skipped, error: 'auth');
+      }
+      if (clock.now().millisecondsSinceEpoch < notBefore) {
+        return FlushResult(
+          FlushStatus.skipped,
+          retryAt: DateTime.fromMillisecondsSinceEpoch(notBefore),
+          error: 'backoff',
+        );
+      }
+    }
+
+    final result = await _drain(immediateOnly, keepGoing);
+    switch (result.status) {
+      case FlushStatus.drained:
+        if (notBefore != 0) await _store.setMeta(MetaKeys.flushNotBefore, '0');
+        if (manual) await _store.setMeta(MetaKeys.authBlocked, '0');
+      case FlushStatus.backingOff:
+        await _store.setMeta(
+          MetaKeys.flushNotBefore,
+          '${result.retryAt!.millisecondsSinceEpoch}',
+        );
+      case FlushStatus.authBlocked:
+        await _store.setMeta(MetaKeys.authBlocked, '1');
+      case FlushStatus.skipped:
+        break;
+    }
+    return result;
+  }
+
+  Future<FlushResult> _drain(
+    bool immediateOnly,
+    bool Function() keepGoing,
+  ) async {
     var delivered = 0;
-    while (shouldContinue()) {
+    while (keepGoing()) {
       final now = clock.now().millisecondsSinceEpoch;
       final claimed = await _store.claim(
         owner: _owner,
         now: now,
-        leaseUntil: now + _config.leaseDuration.inMilliseconds,
-        limit: _config.batching.maxBatchSize,
+        leaseUntil: now + _settings.leaseMs,
+        limit: _settings.maxBatchSize,
         immediateOnly: immediateOnly,
       );
       if (claimed.isEmpty) {
@@ -125,7 +177,7 @@ class FlushController {
     for (var i = 0; i < events.length; i++) {
       bytes += events[i].sizeBytes;
       // Always send at least one event, even if it alone exceeds the limit.
-      if (i > 0 && bytes > _config.batching.maxBatchBytes) {
+      if (i > 0 && bytes > _settings.maxBatchBytes) {
         return events.sublist(0, i);
       }
     }
@@ -162,7 +214,6 @@ class FlushController {
     switch (result) {
       case Success(:final rejectedIds):
         final ids = [for (final e in readable) e.id];
-        await _store.deleteLeased(_owner, ids);
         final accepted = [
           for (final id in ids)
             if (!rejectedIds.contains(id)) id,
@@ -171,10 +222,18 @@ class FlushController {
           for (final id in ids)
             if (rejectedIds.contains(id)) id,
         ];
+        await _store.deleteLeased(
+          _owner,
+          ids,
+          counters: {
+            CounterKeys.sent: accepted.length,
+            CounterKeys.dropped(DropReason.rejectedByServer): rejected.length,
+          },
+        );
         _log.log(LogLevel.debug, 'Delivered ${accepted.length} event(s)');
-        if (accepted.isNotEmpty) _listener.onDelivered(accepted);
+        if (accepted.isNotEmpty) _listener?.onDelivered(accepted);
         if (rejected.isNotEmpty) {
-          _listener.onDropped(rejected, DropReason.rejectedByServer);
+          _listener?.onDropped(rejected, DropReason.rejectedByServer);
         }
         return _Outcome(delivered: accepted.length);
 
@@ -224,7 +283,7 @@ class FlushController {
     var maxAttempt = 1;
     for (final e in events) {
       final attempt = e.attempts + 1;
-      if (attempt >= _config.retry.maxAttempts) {
+      if (attempt >= _settings.retry.maxAttempts) {
         exhausted.add(e.id);
       } else {
         retry.add(e.id);
@@ -232,7 +291,7 @@ class FlushController {
       }
     }
 
-    var delay = _config.retry.delayAfter(maxAttempt, _random);
+    var delay = _settings.retry.delayAfter(maxAttempt, _random);
     final retryAfter = failure.retryAfter;
     if (retryAfter != null && retryAfter > delay) delay = retryAfter;
     final retryAt = now.add(delay);
@@ -255,8 +314,12 @@ class FlushController {
   }
 
   Future<void> _drop(List<String> ids, DropReason reason) async {
-    await _store.deleteLeased(_owner, ids);
-    _listener.onDropped(ids, reason);
+    await _store.deleteLeased(
+      _owner,
+      ids,
+      counters: {CounterKeys.dropped(reason): ids.length},
+    );
+    _listener?.onDropped(ids, reason);
   }
 
   BatchEvent? _decode(StoredEvent e) {

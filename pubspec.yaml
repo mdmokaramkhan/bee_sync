@@ -1,5 +1,5 @@
 name: bee_sync
-description: "Durable, offline-first event delivery for Flutter: persistent SQLite queue, batching, retries, priorities, consent and retention controls."
+description: "Never lose an analytics event: durable, offline-first event delivery for Flutter with batching, retries, consent controls and native background upload."
 version: 0.3.0
 homepage: https://github.com/mdmokaramkhan/bee_sync
 repository: https://github.com/mdmokaramkhan/bee_sync

@@ -83,6 +83,8 @@ WHERE lease_owner = ? AND id IN ({ids})"""
 UPDATE events SET lease_owner = NULL, lease_until = NULL
 WHERE lease_owner = ? AND id IN ({ids})"""
 
+    const val RESET_BACKOFF = "UPDATE events SET next_attempt_at = 0 WHERE next_attempt_at > 0"
+
     const val GET_META = "SELECT value FROM meta WHERE key = ?"
 
     const val SET_META = "INSERT OR REPLACE INTO meta (key, value) VALUES (?, ?)"
@@ -122,6 +124,7 @@ WHERE lease_owner = ? AND id IN ({ids})"""
         "release_retry" to RELEASE_RETRY,
         "release_backoff" to RELEASE_BACKOFF,
         "release" to RELEASE,
+        "reset_backoff" to RESET_BACKOFF,
         "get_meta" to GET_META,
         "set_meta" to SET_META,
         "count_events" to COUNT_EVENTS,

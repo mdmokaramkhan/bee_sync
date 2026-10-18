@@ -220,7 +220,10 @@ final class BackgroundDelivery {
     }
     queue.async { [weak self] in
       guard let self = self else { return complete(false) }
-      let outcome = self.runOnce(source: source, shouldContinue: { !stopped.value })
+      // iOS launched the task, typically with the network up: end a backoff
+      // left by network failures (§2).
+      let outcome = self.runOnce(
+        source: source, networkAvailable: true, shouldContinue: { !stopped.value })
       self.scheduleFollowUp(outcome)
       if case .ran(let run, _, _) = outcome {
         complete(run.status == .drained)
@@ -251,7 +254,9 @@ final class BackgroundDelivery {
   }
 
   /// Opens the database, runs the uploader once and logs to bg_log.
-  func runOnce(source: String, shouldContinue: @escaping () -> Bool) -> RunOutcome {
+  func runOnce(
+    source: String, networkAvailable: Bool = false, shouldContinue: @escaping () -> Bool
+  ) -> RunOutcome {
     guard let path = databasePath else { return .idle }
     do {
       guard let store = try BeeSyncStore.open(path: path) else { return .idle }
@@ -266,7 +271,7 @@ final class BackgroundDelivery {
         return .waitingForMigration
       }
       let result = try NativeUploader(store: store, sender: sender, source: source)
-        .run(shouldContinue: shouldContinue)
+        .run(networkAvailable: networkAvailable, shouldContinue: shouldContinue)
       try Self.logResult(store, source: source, result)
       let remaining = try store.countEvents()
       var nextRunAt = result.retryAt

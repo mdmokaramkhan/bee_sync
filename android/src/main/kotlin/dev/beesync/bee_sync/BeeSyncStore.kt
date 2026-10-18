@@ -107,6 +107,11 @@ internal class BeeSyncStore private constructor(private val db: SQLiteDatabase) 
         db.execSQL(Sql.expandIds(Sql.RELEASE, ids.size), arrayOf<Any>(owner, *ids.toTypedArray()))
     }
 
+    /** Makes every deferred event ready again (the network is back, §3.3). */
+    fun resetBackoff() {
+        db.execSQL(Sql.RESET_BACKOFF)
+    }
+
     fun getMeta(key: String): String? =
         db.rawQuery(Sql.GET_META, arrayOf(key)).use { c -> if (c.moveToFirst()) c.getString(0) else null }
 

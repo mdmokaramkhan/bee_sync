@@ -95,9 +95,12 @@ class FakeBackgroundScheduler implements BackgroundScheduler {
 /// [PlatformSignals] driven by the test.
 class FakePlatformSignals implements PlatformSignals {
   final _backgrounded = StreamController<void>.broadcast(sync: true);
+  final _foregrounded = StreamController<void>.broadcast(sync: true);
   final _restored = StreamController<void>.broadcast(sync: true);
 
   void background() => _backgrounded.add(null);
+
+  void foreground() => _foregrounded.add(null);
 
   void restoreConnectivity() => _restored.add(null);
 
@@ -105,11 +108,15 @@ class FakePlatformSignals implements PlatformSignals {
   Stream<void> get appBackgrounded => _backgrounded.stream;
 
   @override
+  Stream<void> get appForegrounded => _foregrounded.stream;
+
+  @override
   Stream<void> get connectivityRestored => _restored.stream;
 
   @override
   void dispose() {
     _backgrounded.close();
+    _foregrounded.close();
     _restored.close();
   }
 }

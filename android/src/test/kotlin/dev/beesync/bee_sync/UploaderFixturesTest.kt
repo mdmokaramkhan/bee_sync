@@ -122,7 +122,10 @@ class UploaderFixturesTest(private val name: String, private val seed: Int) {
         val store = BeeSyncStore.open(db.path)!!
         val result = store.use {
             NativeUploader(it, UrlConnectionSender(), "test", clock = { now }, random = Random(seed))
-                .run(manual = fixture.optBoolean("manual", false))
+                .run(
+                    manual = fixture.optBoolean("manual", false),
+                    networkAvailable = fixture.optBoolean("network_available", false),
+                )
         }
 
         val expect = fixture.getJSONObject("expect")

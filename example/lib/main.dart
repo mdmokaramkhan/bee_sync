@@ -2,167 +2,181 @@ import 'dart:async';
 
 import 'package:bee_sync/bee_sync.dart';
 import 'package:bee_sync/inspector.dart';
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 
-/// Any endpoint that answers 2xx to a JSON POST works. httpbin echoes the
-/// request, which is handy for inspecting the wire format. To use the local
-/// test server (tool/test_server.dart) from the Android emulator:
-///   flutter run --dart-define=BEE_ENDPOINT=http://10.0.2.2:8080/events
-final _endpoint = Uri.parse(
-  const String.fromEnvironment(
-    'BEE_ENDPOINT',
-    defaultValue: 'https://httpbin.org/post',
-  ),
-);
+import 'analytics.dart';
+import 'delivery_screen.dart';
+import 'demo_config.dart';
+import 'shop.dart';
 
-/// Tracks this many events at startup (`--dart-define=BEE_DEMO_EVENTS=5`),
-/// for scripted end-to-end checks.
-const _demoEvents = int.fromEnvironment('BEE_DEMO_EVENTS');
-
+/// A small shop that tracks what a real app would (sessions, screens, widget
+/// views, purchases) through bee_sync, plus a Delivery tab for testing.
+/// Settings come from dart-defines; see README.md and demo_config.dart.
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
-  await BeeSync.initialize(
+  final bee = await BeeSync.initialize(
     BeeSyncConfig(
-      transport: HttpTransport(endpoint: _endpoint, gzip: false),
-      batching: const BatchingPolicy(
-        flushAt: 5,
-        flushInterval: Duration(seconds: 15),
+      transport: HttpTransport(
+        endpoint: Uri.parse(DemoConfig.endpoint),
+        gzip: false,
       ),
-      logger: const BeeLogger.console(level: LogLevel.debug),
+      batching: const BatchingPolicy(
+        flushAt: DemoConfig.flushAt,
+        flushInterval: Duration(seconds: DemoConfig.flushIntervalSeconds),
+      ),
+      retry: const RetryPolicy(maxAttempts: DemoConfig.maxAttempts),
+      logger: kDebugMode
+          ? const BeeLogger.console(level: LogLevel.debug)
+          : const BeeLogger.silent(),
     ),
   );
-  for (var i = 0; i < _demoEvents; i++) {
-    await BeeSync.instance.track('demo_event', properties: {'n': i});
+
+  final log = DeliveryLog(bee);
+  final analytics = Analytics(bee, autoEvents: DemoConfig.autoEvents)
+    ..onTracked = (name, priority) => log.add(
+      LogKind.tracked,
+      priority == Priority.immediate ? '$name (immediate)' : name,
+    );
+  analytics.start();
+  for (var i = 0; i < DemoConfig.demoEvents; i++) {
+    await bee.track('demo_event', properties: {'n': i});
   }
-  runApp(const ExampleApp());
+  runApp(ExampleApp(analytics: analytics, log: log));
 }
 
-class ExampleApp extends StatelessWidget {
-  const ExampleApp({super.key});
+class ExampleApp extends StatefulWidget {
+  const ExampleApp({required this.analytics, required this.log, super.key});
+
+  final Analytics analytics;
+  final DeliveryLog log;
+
+  @override
+  State<ExampleApp> createState() => _ExampleAppState();
+}
+
+class _ExampleAppState extends State<ExampleApp> {
+  final _cart = Cart();
+  var _tab = 0;
+  late final _observer = AnalyticsRouteObserver(
+    widget.analytics,
+    rootScreen: () => _tabs[_tab].screen,
+  );
+
+  static const _tabs = [
+    (screen: 'shop', label: 'Shop', icon: Icons.storefront),
+    (screen: 'cart', label: 'Cart', icon: Icons.shopping_cart_outlined),
+    (screen: 'delivery', label: 'Delivery', icon: Icons.sync),
+  ];
+
+  @override
+  void initState() {
+    super.initState();
+    widget.analytics.screenView(_tabs[_tab].screen);
+  }
+
+  void _select(int tab) {
+    setState(() => _tab = tab);
+    widget.analytics.screenView(_tabs[tab].screen);
+  }
 
   @override
   Widget build(BuildContext context) => MaterialApp(
     title: 'bee_sync example',
     theme: ThemeData(colorSchemeSeed: Colors.amber),
-    home: const HomePage(),
+    navigatorObservers: [_observer],
+    home: Builder(
+      builder: (context) => Scaffold(
+        appBar: AppBar(
+          title: const Text('bee_sync shop'),
+          actions: [
+            _PendingChip(onTap: () => _select(2)),
+            IconButton(
+              tooltip: 'Inspector',
+              icon: const Icon(Icons.bug_report_outlined),
+              onPressed: () => BeeSyncInspector.show(context),
+            ),
+          ],
+        ),
+        body: switch (_tab) {
+          0 => ShopScreen(analytics: widget.analytics, cart: _cart),
+          1 => CartScreen(analytics: widget.analytics, cart: _cart),
+          _ => DeliveryScreen(analytics: widget.analytics, log: widget.log),
+        },
+        bottomNavigationBar: ListenableBuilder(
+          listenable: _cart,
+          builder: (context, _) => NavigationBar(
+            selectedIndex: _tab,
+            onDestinationSelected: _select,
+            destinations: [
+              for (final t in _tabs)
+                NavigationDestination(
+                  label: t.label,
+                  icon: t.screen == 'cart' && _cart.items.isNotEmpty
+                      ? Badge.count(
+                          count: _cart.items.length,
+                          child: Icon(t.icon),
+                        )
+                      : Icon(t.icon),
+                ),
+            ],
+          ),
+        ),
+      ),
+    ),
   );
 }
 
-class HomePage extends StatefulWidget {
-  const HomePage({super.key});
+/// Pending events at a glance: green when everything is delivered.
+class _PendingChip extends StatefulWidget {
+  const _PendingChip({required this.onTap});
+
+  final VoidCallback onTap;
 
   @override
-  State<HomePage> createState() => _HomePageState();
+  State<_PendingChip> createState() => _PendingChipState();
 }
 
-class _HomePageState extends State<HomePage> {
-  final _bee = BeeSync.instance;
-  final _log = <String>[];
+class _PendingChipState extends State<_PendingChip> {
+  late final StreamSubscription<QueueStats> _sub;
   QueueStats? _stats;
-  late final StreamSubscription<QueueStats> _statsSub;
-  late final StreamSubscription<DeliveryEvent> _eventsSub;
-  int _counter = 0;
 
   @override
   void initState() {
     super.initState();
-    _statsSub = _bee.stats.listen((s) => setState(() => _stats = s));
-    _eventsSub = _bee.events.listen(
-      (e) => _addLog(switch (e) {
-        Delivered(:final ids) => 'Delivered ${ids.length}',
-        Dropped(:final ids, :final reason) =>
-          'Dropped ${ids.length} (${reason.name})',
-        FlushFailed(:final reason) => 'Flush failed: $reason',
-      }),
-    );
-    _bee.getStats().then((s) => setState(() => _stats = s));
+    final bee = BeeSync.instance;
+    _sub = bee.stats.listen((s) => setState(() => _stats = s));
+    bee.getStats().then((s) {
+      if (mounted) setState(() => _stats ??= s);
+    });
   }
 
   @override
   void dispose() {
-    _statsSub.cancel();
-    _eventsSub.cancel();
+    _sub.cancel();
     super.dispose();
-  }
-
-  void _addLog(String line) => setState(() {
-    _log.insert(0, '${TimeOfDay.now().format(context)}  $line');
-    if (_log.length > 50) _log.removeLast();
-  });
-
-  Future<void> _track(Priority priority) async {
-    final id = await _bee.track(
-      priority == Priority.immediate ? 'purchase' : 'button_tap',
-      properties: {'n': ++_counter},
-      priority: priority,
-    );
-    _addLog('Tracked ${priority.name} ${id.substring(0, 8)}…');
   }
 
   @override
   Widget build(BuildContext context) {
     final s = _stats;
-    return Scaffold(
-      appBar: AppBar(
-        title: const Text('bee_sync'),
-        actions: [
-          IconButton(
-            tooltip: 'Inspector',
-            icon: const Icon(Icons.bug_report_outlined),
-            onPressed: () => BeeSyncInspector.show(context),
-          ),
-        ],
-      ),
-      body: ListView(
-        padding: const EdgeInsets.all(16),
-        children: [
-          Card(
-            child: Padding(
-              padding: const EdgeInsets.all(16),
-              child: Text(
-                s == null
-                    ? 'Loading…'
-                    : 'Pending: ${s.pending}   In flight: ${s.inFlight}\n'
-                          'Sent: ${s.sent}   Dropped: ${s.droppedTotal}\n'
-                          'Consent: ${s.consent.name}'
-                          '${s.lastError == null ? '' : '\nLast error: ${s.lastError}'}',
-              ),
-            ),
-          ),
-          const SizedBox(height: 12),
-          Wrap(
-            spacing: 8,
-            runSpacing: 8,
-            children: [
-              FilledButton(
-                onPressed: () => _track(Priority.normal),
-                child: const Text('Track normal'),
-              ),
-              FilledButton.tonal(
-                onPressed: () => _track(Priority.immediate),
-                child: const Text('Track immediate'),
-              ),
-              OutlinedButton(
-                onPressed: () async => _addLog('${await _bee.flush()}'),
-                child: const Text('Flush'),
-              ),
-            ],
-          ),
-          SwitchListTile(
-            title: const Text('Tracking consent'),
-            value: _bee.consent == ConsentState.granted,
-            onChanged: (on) async {
-              await _bee.setConsent(
-                on ? ConsentState.granted : ConsentState.denied,
-                purge: !on,
-              );
-              setState(() {});
-            },
-          ),
-          const Divider(),
-          for (final line in _log)
-            Text(line, style: Theme.of(context).textTheme.bodySmall),
-        ],
+    final queued = s == null ? 0 : s.pending + s.inFlight;
+    final failing =
+        queued > 0 && (s?.backoffUntil?.isAfter(DateTime.now()) ?? false);
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 4),
+      child: ActionChip(
+        onPressed: widget.onTap,
+        avatar: Icon(
+          queued == 0 ? Icons.cloud_done : Icons.cloud_upload,
+          size: 18,
+          color: queued == 0
+              ? Colors.green
+              : failing
+              ? Colors.red
+              : Colors.amber.shade800,
+        ),
+        label: Text(queued == 0 ? 'Synced' : '$queued queued'),
       ),
     );
   }

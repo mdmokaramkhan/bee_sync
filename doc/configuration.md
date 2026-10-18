@@ -48,7 +48,7 @@ await BeeSync.instance.setHeaders({'Authorization': 'Bearer $newToken'});
 | `maxBatchSize` | `100` | Most events per request. |
 | `maxBatchBytes` | 512 KB | Most payload bytes per request (one oversized event is still sent alone). |
 
-Uploads also start when the app goes to the background, when connectivity returns, after an immediate-priority event, and when you call `flush()`.
+Uploads also start when the app goes to the background or comes back to the foreground, when connectivity returns, after an immediate-priority event, and when you call `flush()`.
 
 ## Retries
 
@@ -60,7 +60,7 @@ Uploads also start when the app goes to the background, when connectivity return
 
 Delays double on each attempt, with some randomness so many devices don't retry at once. A server `Retry-After` header wins if it's longer.
 
-Only failures the server answered count toward `maxAttempts` (408, 429, 5xx). When there's no response (offline, timeout, server unreachable), bee_sync backs off the same way but counts no attempt, so a long time offline never drops events. They are still bounded by `RetentionPolicy` (7 days by default).
+Only failures the server answered count toward `maxAttempts` (408, 429, 5xx). When there's no response (offline, timeout, server unreachable), bee_sync backs off the same way but counts no attempt, so a long time offline never drops events. They are still bounded by `RetentionPolicy` (7 days by default). The wait ends as soon as the network is back: when connectivity returns, the app is opened or comes back to the foreground, you call `flush()`, a background job starts, or any request gets a response.
 
 ## Retention
 

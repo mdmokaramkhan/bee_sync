@@ -1,3 +1,20 @@
+## 0.3.3 (unreleased)
+
+### Fixed
+* **Events queued offline could wait long after the network was back.** Each network failure doubles the wait (up to 10 minutes), and that wait outlived the outage: `flush()` skipped those events, and the Android worker, started *because* the network returned, skipped its run and rescheduled itself, which Android 14+ and OEM battery savers can postpone much further. Now an offline wait ends as soon as the network is known to work again: when any request gets a response, on app start, when the app returns to the foreground, on `flush()`, and when an Android job or iOS background task starts. Waits the server asked for (5xx, `Retry-After`) are kept.
+
+### Changed
+* `PlatformSignals` has a new `appForegrounded` stream. Custom implementations need to add it; `FakePlatformSignals` has `foreground()`.
+* `flush()` now also sends events waiting after network failures.
+* `spec/uploader_contract.md`: runs take `network_available`, and the new `reset_backoff` statement ends a network backoff (§2, §3.3). Three new shared test cases.
+
+### Example
+* Rewritten as a small shop that tracks sessions, app foreground/background, screen views, widget views and purchases, with a Delivery tab for testing (status, test events, flush, simulate offline, log).
+* Settings come from dart-defines (`BEE_ENDPOINT`, `BEE_FLUSH_AT`, `BEE_FLUSH_INTERVAL`, `BEE_MAX_ATTEMPTS`, `BEE_AUTO_EVENTS`), ideally from a gitignored `bee.local.json`, so the code never needs local edits.
+
+### Docs
+* `doc/test-plan.md`: scenario B12 (no waiting once the network is back) and section I (app events), updated for the new example.
+
 ## 0.3.2 — 2026-10-18
 
 A patch release fixing event loss found by end-to-end testing on an Android emulator and real devices: events were dropped after time offline, and could be stranded when the app was killed right after going to the background. Upgrading is recommended for all users.

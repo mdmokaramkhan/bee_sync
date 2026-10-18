@@ -49,6 +49,7 @@ void main() {
       'release_retry': normalize(sql.releaseRetry),
       'release_backoff': normalize(sql.releaseBackoff),
       'release': normalize(sql.release),
+      'reset_backoff': normalize(sql.resetBackoff),
       'get_meta': normalize(sql.getMeta),
       'set_meta': normalize(sql.setMeta),
       'count_events': normalize(sql.countEvents),

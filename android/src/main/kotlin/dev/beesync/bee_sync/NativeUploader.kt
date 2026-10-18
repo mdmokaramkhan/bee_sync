@@ -105,17 +105,30 @@ internal class NativeUploader(
 
     /**
      * One run. Background runs are never [manual]; it exists so the shared
-     * fixtures can run unchanged. [shouldContinue] is checked before each batch
-     * (WorkManager may stop the worker).
+     * fixtures can run unchanged. [networkAvailable] ends a backoff caused by
+     * network failures (§2, §3.3). [shouldContinue] is checked before each
+     * batch (WorkManager may stop the worker).
      */
-    fun run(manual: Boolean = false, shouldContinue: () -> Boolean = { true }): RunResult {
+    fun run(
+        manual: Boolean = false,
+        networkAvailable: Boolean = false,
+        shouldContinue: () -> Boolean = { true },
+    ): RunResult {
         if (store.getMeta(MetaKeys.CONSENT) != "granted") {
             return RunResult(RunStatus.SKIPPED, error = "consent")
         }
         val transport = TransportConfig.parse(store.getMeta(MetaKeys.TRANSPORT_CONFIG))
             ?: return RunResult(RunStatus.SKIPPED, error = "transport")
         val settings = DeliverySettings.parse(store.getMeta(MetaKeys.DELIVERY_CONFIG))
-        val notBefore = store.getMeta(MetaKeys.FLUSH_NOT_BEFORE)?.toLongOrNull() ?: 0
+        val networkFailures =
+            (store.getMeta(MetaKeys.NETWORK_FAILURES)?.toIntOrNull() ?: 0).coerceAtLeast(0)
+        var notBefore = store.getMeta(MetaKeys.FLUSH_NOT_BEFORE)?.toLongOrNull() ?: 0
+        if (networkAvailable && networkFailures > 0) {
+            // The outage is over: events it deferred are ready again.
+            store.resetBackoff()
+            store.setMeta(MetaKeys.FLUSH_NOT_BEFORE, "0")
+            notBefore = 0
+        }
         if (!manual) {
             if (store.getMeta(MetaKeys.AUTH_BLOCKED) == "1") {
                 return RunResult(RunStatus.SKIPPED, error = "auth")
@@ -125,8 +138,6 @@ internal class NativeUploader(
             }
         }
 
-        val networkFailures =
-            (store.getMeta(MetaKeys.NETWORK_FAILURES)?.toIntOrNull() ?: 0).coerceAtLeast(0)
         val result = Run(transport, settings, shouldContinue, networkFailures).drain()
         when (result.status) {
             RunStatus.DRAINED -> {
@@ -210,9 +221,11 @@ internal class NativeUploader(
 
             val result = post(readable)
             if (result !is SendResult.Network && networkFailures != 0) {
-                // The server answered, so the network is back (§3).
+                // The server answered, so the outage is over: events it
+                // deferred can go in this run (§3).
                 networkFailures = 0
                 store.setMeta(MetaKeys.NETWORK_FAILURES, "0")
+                store.resetBackoff()
             }
             return when (result) {
                 is SendResult.Success -> {

@@ -1,0 +1,65 @@
+{
+  "description": "Once a request gets a response after network failures, rows deferred by the outage are ready again and go in the same run.",
+  "now": 1760000000000,
+  "meta": {
+    "network_failures": "2"
+  },
+  "events": [
+    {
+      "id": "a",
+      "name": "evt",
+      "properties": {
+        "k": "a"
+      },
+      "priority": "normal",
+      "created_at": 1759999940000,
+      "attempts": 0,
+      "next_attempt_at": 0,
+      "lease_owner": null,
+      "lease_until": null
+    },
+    {
+      "id": "b",
+      "name": "evt",
+      "properties": {
+        "k": "b"
+      },
+      "priority": "normal",
+      "created_at": 1759999940000,
+      "attempts": 0,
+      "next_attempt_at": 1760000120000,
+      "lease_owner": null,
+      "lease_until": null
+    }
+  ],
+  "responses": [
+    {
+      "status": 200,
+      "headers": {},
+      "body": ""
+    },
+    {
+      "status": 200,
+      "headers": {},
+      "body": ""
+    }
+  ],
+  "expect": {
+    "status": "drained",
+    "requests": [
+      [
+        "a"
+      ],
+      [
+        "b"
+      ]
+    ],
+    "remaining": [],
+    "counters": {
+      "sent": 2
+    },
+    "meta": {
+      "network_failures": "0"
+    }
+  }
+}

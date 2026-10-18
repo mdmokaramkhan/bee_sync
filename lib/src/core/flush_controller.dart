@@ -98,19 +98,32 @@ class FlushController {
   /// Runs one upload pass.
   ///
   /// A [manual] run ignores the global backoff and the auth block (the app
-  /// asked explicitly) but never consent. [shouldContinue] is checked before
+  /// asked explicitly) but never consent. [networkAvailable] means the run was
+  /// started because the network is probably back, which ends a backoff
+  /// caused by network failures (§3.3). [shouldContinue] is checked before
   /// each batch so consent changes and shutdown take effect promptly.
   Future<FlushResult> run({
     bool manual = false,
     bool immediateOnly = false,
+    bool networkAvailable = false,
     bool Function()? shouldContinue,
   }) async {
     final keepGoing = _keepGoing = shouldContinue ?? () => true;
     if (await _store.getMeta(MetaKeys.consent) != ConsentState.granted.name) {
       return const FlushResult(FlushStatus.skipped, error: 'consent');
     }
-    final notBefore =
+    _networkFailures = max(
+      0,
+      int.tryParse(await _store.getMeta(MetaKeys.networkFailures) ?? '') ?? 0,
+    );
+    var notBefore =
         int.tryParse(await _store.getMeta(MetaKeys.flushNotBefore) ?? '') ?? 0;
+    if (networkAvailable && _networkFailures > 0) {
+      // The outage is over: events it deferred are ready again.
+      await _store.resetBackoff();
+      await _store.setMeta(MetaKeys.flushNotBefore, '0');
+      notBefore = 0;
+    }
     if (!manual) {
       if (await _store.getMeta(MetaKeys.authBlocked) == '1') {
         return const FlushResult(FlushStatus.skipped, error: 'auth');
@@ -124,10 +137,6 @@ class FlushController {
       }
     }
 
-    _networkFailures = max(
-      0,
-      int.tryParse(await _store.getMeta(MetaKeys.networkFailures) ?? '') ?? 0,
-    );
     final result = await _drain(immediateOnly, keepGoing);
     switch (result.status) {
       case FlushStatus.drained:
@@ -228,9 +237,11 @@ class FlushController {
     }
     _listener?.onRequest(batch, result, stopwatch.elapsed);
     if (result is! NetworkFailure && _networkFailures != 0) {
-      // The server answered, so the network is back (§3).
+      // The server answered, so the outage is over: events it deferred can go
+      // in this run (§3).
       _networkFailures = 0;
       await _store.setMeta(MetaKeys.networkFailures, '0');
+      await _store.resetBackoff();
     }
 
     switch (result) {

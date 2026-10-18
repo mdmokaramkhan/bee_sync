@@ -54,6 +54,10 @@ WHERE lease_owner = ? AND id IN ({ids});
 UPDATE events SET lease_owner = NULL, lease_until = NULL
 WHERE lease_owner = ? AND id IN ({ids});
 
+-- name: reset_backoff
+-- The network is back after an outage (§3.3): every deferred event is ready.
+UPDATE events SET next_attempt_at = 0 WHERE next_attempt_at > 0;
+
 -- name: get_meta
 -- params: key
 SELECT value FROM meta WHERE key = ?;

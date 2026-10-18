@@ -102,6 +102,11 @@ final class BeeSyncStore {
     try execute(Sql.expandIds(Sql.releaseBackoff, count: ids.count), [nextAttemptAt, owner] + ids.map { $0 as Value })
   }
 
+  /// Makes every deferred event ready again (the network is back, §3.3).
+  func resetBackoff() throws {
+    try execute(Sql.resetBackoff, [])
+  }
+
   func release(owner: String, ids: [String]) throws {
     if ids.isEmpty { return }
     try execute(Sql.expandIds(Sql.release, count: ids.count), [owner] + ids.map { $0 as Value })

@@ -118,9 +118,13 @@ final class NativeUploader {
   }
 
   /// One run. Background runs are never `manual`; it exists so the shared
-  /// fixtures run unchanged. `shouldContinue` is checked before each batch
-  /// (the OS can end background time at any point).
-  func run(manual: Bool = false, shouldContinue: @escaping () -> Bool = { true }) throws -> RunResult {
+  /// fixtures run unchanged. `networkAvailable` ends a backoff caused by
+  /// network failures (§2, §3.3). `shouldContinue` is checked before each
+  /// batch (the OS can end background time at any point).
+  func run(
+    manual: Bool = false, networkAvailable: Bool = false,
+    shouldContinue: @escaping () -> Bool = { true }
+  ) throws -> RunResult {
     keepGoing = shouldContinue
     guard try store.getMeta(MetaKeys.consent) == "granted" else {
       return RunResult(status: .skipped, error: "consent")
@@ -129,7 +133,14 @@ final class NativeUploader {
       return RunResult(status: .skipped, error: "transport")
     }
     let settings = DeliverySettings.parse(try store.getMeta(MetaKeys.deliveryConfig))
-    let notBefore = Int64(try store.getMeta(MetaKeys.flushNotBefore) ?? "") ?? 0
+    networkFailures = max(0, Int(try store.getMeta(MetaKeys.networkFailures) ?? "") ?? 0)
+    var notBefore = Int64(try store.getMeta(MetaKeys.flushNotBefore) ?? "") ?? 0
+    if networkAvailable && networkFailures > 0 {
+      // The outage is over: events it deferred are ready again.
+      try store.resetBackoff()
+      try store.setMeta(MetaKeys.flushNotBefore, "0")
+      notBefore = 0
+    }
     if !manual {
       if try store.getMeta(MetaKeys.authBlocked) == "1" {
         return RunResult(status: .skipped, error: "auth")
@@ -139,7 +150,6 @@ final class NativeUploader {
       }
     }
 
-    networkFailures = max(0, Int(try store.getMeta(MetaKeys.networkFailures) ?? "") ?? 0)
     let result = try drain(transport, settings, keepGoing)
     switch result.status {
     case .drained:
@@ -229,9 +239,11 @@ final class NativeUploader {
 
     let result = post(readable, transport)
     if !result.isNetwork && networkFailures != 0 {
-      // The server answered, so the network is back (§3).
+      // The server answered, so the outage is over: events it deferred can go
+      // in this run (§3).
       networkFailures = 0
       try store.setMeta(MetaKeys.networkFailures, "0")
+      try store.resetBackoff()
     }
     switch result {
     case .success(let rejected):

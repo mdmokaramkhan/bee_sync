@@ -127,6 +127,22 @@ class FlushWorkerTest {
         assertEquals(WorkInfo.State.ENQUEUED, state(BackgroundWork.RETRY))
     }
 
+    @Test fun aBackoffFromNetworkFailuresEndsWhenTheWorkerRuns() {
+        // Queued offline: the app's failed uploads left a long network backoff.
+        // The job only runs with a network connection, so the outage is over.
+        val later = System.currentTimeMillis() + 5 * 60_000
+        db.setMeta(MetaKeys.NETWORK_FAILURES, "8")
+        db.setMeta(MetaKeys.FLUSH_NOT_BEFORE, "$later")
+        db.insert(id = "a", payload = "{}".toByteArray(), nextAttemptAt = later)
+        server.enqueue(MockResponse().setResponseCode(200))
+
+        runWorker()
+
+        assertEquals(1, server.requestCount)
+        assertEquals(0L, eventCount())
+        assertEquals("0", db.meta(MetaKeys.NETWORK_FAILURES))
+    }
+
     @Test fun eventsLeasedByTheAppAreRetriedWhenTheLeaseExpires() {
         // The app was killed mid-request: its lease still hides the event.
         db.insert(

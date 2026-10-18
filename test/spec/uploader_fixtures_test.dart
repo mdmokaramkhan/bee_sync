@@ -133,7 +133,10 @@ Future<void> _runFixture(Map<String, Object?> fixture, int seed) async {
     Clock.fixed(_time(now)),
     () => rig
         .controller(client, settings, seed: seed)
-        .run(manual: fixture['manual'] == true),
+        .run(
+          manual: fixture['manual'] == true,
+          networkAvailable: fixture['network_available'] == true,
+        ),
   );
 
   final expect_ = fixture['expect']! as Map<String, Object?>;

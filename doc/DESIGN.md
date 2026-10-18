@@ -1,6 +1,6 @@
 # bee_sync — Design Document
 
-**Status:** Implemented through 0.3.1 · **Last updated:** 2026-10-18
+**Status:** Implemented through 0.3.2 · **Last updated:** 2026-10-18
 
 ---
 

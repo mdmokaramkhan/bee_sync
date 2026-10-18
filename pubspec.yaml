@@ -1,6 +1,6 @@
 name: bee_sync
 description: "Never lose an analytics event: durable, offline-first event delivery for Flutter with batching, retries, consent controls and native background upload."
-version: 0.3.0
+version: 0.3.1
 homepage: https://github.com/mdmokaramkhan/bee_sync
 repository: https://github.com/mdmokaramkhan/bee_sync
 issue_tracker: https://github.com/mdmokaramkhan/bee_sync/issues
@@ -12,12 +12,14 @@ topics:
   - sync
 
 environment:
-  sdk: ^3.10.9
-  flutter: '>=3.3.0'
+  sdk: ^3.10.0
+  flutter: '>=3.38.0'
 
 dependencies:
   clock: ^1.1.2
-  connectivity_plus: ^7.3.2
+  # 6.0 is the first version with the List<ConnectivityResult> API used here;
+  # allowing it lets apps on older Xcode versions pick a release that builds.
+  connectivity_plus: '>=6.0.0 <8.0.0'
   flutter:
     sdk: flutter
   http: ^1.6.0

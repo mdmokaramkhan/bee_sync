@@ -129,6 +129,8 @@ class BeeSync implements FlushListener {
   Future<FlushResult>? _runningFlush;
   bool _flushAgain = false;
   bool _closed = false;
+  int _activeTracks = 0;
+  Completer<void>? _tracksIdle;
   bool _backgroundEnabled = false;
 
   late ConsentState _consent;
@@ -238,7 +240,8 @@ class BeeSync implements FlushListener {
     }
   }
 
-  /// Stops flushing, waits for an in-progress flush and closes the store.
+  /// Stops flushing, waits for in-progress `track()` calls and flushes, and
+  /// closes the store.
   /// Undelivered events stay on disk for the next launch (and for the native
   /// background uploader).
   Future<void> close() async {
@@ -251,6 +254,10 @@ class BeeSync implements FlushListener {
       unawaited(s.cancel());
     }
     _signals.dispose();
+    if (_activeTracks > 0) {
+      _tracksIdle = Completer<void>();
+      await _tracksIdle!.future;
+    }
     await _runningFlush;
     await _store.close();
     await _statsController.close();
@@ -273,6 +280,23 @@ class BeeSync implements FlushListener {
   }) async {
     if (!_ready.isCompleted) await _ready.future;
     _checkOpen();
+    // close() waits for tracks already in progress before closing the store.
+    _activeTracks++;
+    try {
+      return await _track(name, properties, priority);
+    } finally {
+      if (--_activeTracks == 0) {
+        _tracksIdle?.complete();
+        _tracksIdle = null;
+      }
+    }
+  }
+
+  Future<String> _track(
+    String name,
+    Map<String, Object?> properties,
+    Priority priority,
+  ) async {
     if (name.isEmpty) throw const InvalidEventException('Event name is empty');
 
     final List<int> payload;

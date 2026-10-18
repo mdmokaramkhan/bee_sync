@@ -89,6 +89,9 @@ class FlushController {
   final BeeLogger _log;
   static const _uuid = Uuid();
 
+  /// The current run's [run] `shouldContinue`, also checked while splitting.
+  bool Function() _keepGoing = () => true;
+
   /// Runs one upload pass.
   ///
   /// A [manual] run ignores the global backoff and the auth block (the app
@@ -99,7 +102,7 @@ class FlushController {
     bool immediateOnly = false,
     bool Function()? shouldContinue,
   }) async {
-    final keepGoing = shouldContinue ?? () => true;
+    final keepGoing = _keepGoing = shouldContinue ?? () => true;
     if (await _store.getMeta(MetaKeys.consent) != ConsentState.granted.name) {
       return const FlushResult(FlushStatus.skipped, error: 'consent');
     }
@@ -275,6 +278,11 @@ class FlushController {
     if (first.stop != null) {
       await _store.release(_owner, [for (final e in events.skip(mid)) e.id]);
       return first;
+    }
+    // Splitting can take many requests; stop when the run should end (§3.2).
+    if (!_keepGoing()) {
+      await _store.release(_owner, [for (final e in events.skip(mid)) e.id]);
+      return _Outcome(delivered: first.delivered, stop: FlushStatus.skipped);
     }
     final second = await _send(events.sublist(mid));
     return second.plusDelivered(first.delivered);

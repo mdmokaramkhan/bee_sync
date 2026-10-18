@@ -1,3 +1,30 @@
+## 0.3.1 — 2026-10-18
+
+A patch release fixing issues found in a full code review: an iOS App Store privacy requirement, data loss on HTTP redirects, and a possible crash on iOS. It also adds CI.
+
+### Fixed
+* **iOS: the privacy manifest now ships.** `PrivacyInfo.xcprivacy` was never bundled, and it didn't declare the `UserDefaults` usage. Apps could get App Store privacy warnings. It is now bundled and declares `UserDefaults` with reason `CA92.1`.
+* **HTTP redirects are no longer followed (iOS and Dart).** A redirected `POST` could be re-sent as a `GET` without a body. If that returned 2xx, events were marked delivered although the server never received them; if it returned 405, they were dropped. A 3xx is now retried, as on Android. *(Android was already correct.)*
+* **iOS: late background-task registration no longer crashes.** Apps that register plugins after launch (add-to-app, some scene-based setups) crashed in `BGTaskScheduler`. The refusal is now caught and reported as a startup warning, and only registered tasks are scheduled.
+* **A huge `Retry-After` header could crash the iOS app** (integer overflow). On all platforms, `Retry-After` is now capped at 24 hours and parsed without overflow.
+* **iOS: background runs stop promptly when time runs out.** The request in progress is cancelled, the BGTask is completed exactly once, and splitting a refused batch checks between halves whether to continue. Android and Dart split the same way now.
+* **iOS: failed background runs** are logged to the background log and rescheduled, instead of silently ending the background chain.
+* **iOS: the database path is stored relative to the app's home directory**, so background delivery keeps working after an app update moves the container.
+* **iOS: gzip falls back to an uncompressed body** if compression fails, instead of sending an empty body.
+* **`close()` waits for `track()` calls already in progress**, instead of closing the database under them.
+
+### Changed
+* SDK constraints: `sdk: ^3.10.0` (was `^3.10.9`) and `flutter: '>=3.38.0'` (was `'>=3.3.0'`, which was meaningless with the Dart constraint).
+* `connectivity_plus` now accepts `>=6.0.0 <8.0.0` (was `^7.3.2`). connectivity_plus 7.3 uses iOS 26 SDK APIs, so apps building with an older Xcode couldn't compile; they can now resolve a 6.x release. Tested against 6.0.4.
+* `spec/uploader_contract.md`: never follow redirects, cap `Retry-After` at 24 hours, and check "should continue" while splitting. There are two new shared test cases.
+
+### Added
+* CI (`.github/workflows/ci.yml`): Dart format, analysis, tests and publish dry run; Android tests; iOS tests, using the newest stable Xcode on the runner.
+
+### Docs
+* `doc/DESIGN.md` refreshed from the code (API, transport results, observability, testing, layout, risks).
+* Contributor test commands fixed for a fresh clone; `leaseDuration` documented.
+
 ## 0.3.0 — 2026-10-18
 
 **Debugging tools and a faster `track()`.** A built-in inspector screen shows the queue, recent requests and the native background log. `track()` makes one store call instead of five, which makes it about 2× faster. First release intended for pub.dev.

@@ -92,6 +92,7 @@ Use `am kill`, not `am force-stop`: force-stop cancels all jobs by design.
 |---|---|
 | `backgroundEnabled` is false | Are you using a custom transport or a custom store? Is `BackgroundConfig.enabled` false? |
 | iOS warns about `Info.plist` | Add the missing identifiers or background modes it names. |
+| iOS warns a task "was not registered" | Your app registers plugins after launch; call `BeeSyncPlugin.registerBackgroundTasks()` in `didFinishLaunchingWithOptions`. |
 | *No task request … has been scheduled* (lldb) | Nothing was queued when the app went to the background, or the `Info.plist` entries are missing. |
 | Events pile up, background log says `skipped: auth` | Your token expired; call `setHeaders()` with a fresh one, or switch to an ingestion key. |
 | Background log says `skipped: backoff` | The server asked to wait (`Retry-After`); uploads resume after it. |

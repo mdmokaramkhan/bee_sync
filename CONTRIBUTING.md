@@ -50,13 +50,19 @@ cd bee_sync && flutter pub get && (cd example && flutter pub get)
 
 ## Running tests
 
+CI runs all of the following on every pull request: Dart format, analysis, tests and a publish dry run; the Android tests; and the iOS tests.
+
 **Dart** (fast; run often):
 
 ```bash
 flutter test
 ```
 
-**Android** (Robolectric):
+**Android** (Robolectric). Build the example once first; that generates the Gradle wrapper:
+
+```bash
+cd example && flutter build apk --debug
+```
 
 ```bash
 cd example/android && ./gradlew :bee_sync:testDebugUnitTest
@@ -107,7 +113,7 @@ Three uploaders (Dart, Kotlin, Swift) share one database. They stay correct only
 
 ## Code style
 
-- **Dart:** `dart format .` and `flutter analyze` must be clean; CI and pub.dev scoring check both.
+- **Dart:** `dart format .` and `flutter analyze` must be clean; CI ([`.github/workflows/ci.yml`](.github/workflows/ci.yml)) and pub.dev scoring check both.
 - **Kotlin and Swift:** follow the style of the surrounding code.
 - **Comments:** explain *why*, not *what*. Public Dart APIs need doc comments.
 - **Tests:** add one for every behaviour change. Use `fake_async` or the `Rig` in `test/core/bee_sync_test.dart` for time-dependent code.

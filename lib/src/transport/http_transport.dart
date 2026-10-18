@@ -65,8 +65,16 @@ class HttpTransport implements EventTransport {
 
     final http.Response response;
     try {
+      // Never follow redirects: dart:io turns a 303 into a body-less GET, whose
+      // 200 would mark events delivered. A 3xx is reported as retryable
+      // instead (spec/uploader_contract.md §4).
+      final request = http.Request('POST', endpoint)
+        ..followRedirects = false
+        ..headers.addAll(headers)
+        ..bodyBytes = body;
       response = await _client
-          .post(endpoint, headers: headers, body: body)
+          .send(request)
+          .then(http.Response.fromStream)
           .timeout(timeout);
     } on TimeoutException {
       return RetryableFailure('Timed out after ${timeout.inSeconds}s');
@@ -108,14 +116,28 @@ class HttpTransport implements EventTransport {
     return RetryableFailure('Unexpected $reason');
   }
 
-  /// Parses a `Retry-After` value: delay-seconds or an HTTP date.
+  /// Longest `Retry-After` honoured; larger values are capped to it
+  /// (spec/uploader_contract.md §3.1).
+  static const maxRetryAfter = Duration(hours: 24);
+
+  /// Parses a `Retry-After` value: delay-seconds or an HTTP date, capped at
+  /// [maxRetryAfter].
   static Duration? parseRetryAfter(String? value) {
     if (value == null) return null;
-    final seconds = int.tryParse(value.trim());
-    if (seconds != null) return seconds < 0 ? null : Duration(seconds: seconds);
+    final trimmed = value.trim();
+    if (RegExp(r'^\d+$').hasMatch(trimmed)) {
+      // Compare as digits first: a huge value would overflow int/Duration.
+      final seconds = int.tryParse(trimmed);
+      if (seconds == null || seconds > maxRetryAfter.inSeconds) {
+        return maxRetryAfter;
+      }
+      return Duration(seconds: seconds);
+    }
+    if (int.tryParse(trimmed) != null) return null; // negative
     try {
       final delay = HttpDate.parse(value).difference(clock.now());
-      return delay.isNegative ? Duration.zero : delay;
+      if (delay.isNegative) return Duration.zero;
+      return delay > maxRetryAfter ? maxRetryAfter : delay;
     } on HttpException {
       return null;
     } on FormatException {

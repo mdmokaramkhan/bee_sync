@@ -84,18 +84,20 @@ For each row, `attempt = attempts + 1`. Rows with `attempt >= max_attempts` are 
 a        = max attempt among retried rows (1 if none)
 cap      = min(retry_max_ms, retry_base_ms * 2^(a-1))
 delay    = cap/2 + uniform_int(0, cap - cap/2)        # integer division
-delay    = max(delay, Retry-After in ms)              # if the header is present
+delay    = max(delay, min(Retry-After, 24 h) in ms)   # if the header is present
 retry_at = now + delay
 release_retry(retry_at, owner, ids)
 ```
 
-`Retry-After` is either delay-seconds or an HTTP-date (RFC 7231).
+`Retry-After` is either delay-seconds or an HTTP-date (RFC 7231). Values above 24 hours are capped at 24 hours; parse with overflow-safe arithmetic (a huge digit string must not crash or wrap).
 
 ### 3.2 Split
 
-Send the first `floor(n/2)` rows, then the rest. If the first half stops the run, `release` the second half untouched and return that stop. Requests made while splitting go out in this order: depth-first, first half first.
+Send the first `floor(n/2)` rows, then the rest. If the first half stops the run, `release` the second half untouched and return that stop. Before sending the second half, check whether the run should continue (the OS may be ending background time); if not, `release` the second half and stop(skipped). Requests made while splitting go out in this order: depth-first, first half first.
 
 ## 4. Request
+
+**Never follow redirects.** Many HTTP clients follow a 301/302/303 for a `POST` by re-sending it as a `GET` without a body. If that `GET` returns 2xx, the events would be deleted as delivered although the server never received them. Disable automatic redirects and treat any 3xx as retryable (§3).
 
 ```
 POST <endpoint>

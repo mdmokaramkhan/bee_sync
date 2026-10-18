@@ -2,13 +2,24 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
+	<key>NSPrivacyTracking</key>
+	<false/>
 	<key>NSPrivacyTrackingDomains</key>
-	<array/>
-	<key>NSPrivacyAccessedAPITypes</key>
 	<array/>
 	<key>NSPrivacyCollectedDataTypes</key>
 	<array/>
-	<key>NSPrivacyTracking</key>
-	<false/>
+	<key>NSPrivacyAccessedAPITypes</key>
+	<array>
+		<dict>
+			<!-- BackgroundDelivery stores the database location and the
+			     background-delivery switch for this app only. -->
+			<key>NSPrivacyAccessedAPIType</key>
+			<string>NSPrivacyAccessedAPICategoryUserDefaults</string>
+			<key>NSPrivacyAccessedAPITypeReasons</key>
+			<array>
+				<string>CA92.1</string>
+			</array>
+		</dict>
+	</array>
 </dict>
 </plist>

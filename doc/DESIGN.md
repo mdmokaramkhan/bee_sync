@@ -1,6 +1,6 @@
 # bee_sync — Design Document
 
-**Status:** Implemented through 0.3.1 · **Last updated:** 2026-10-18 · **Source:** `deep-research-report.md`
+**Status:** Implemented through 0.3.1 · **Last updated:** 2026-10-18
 
 ---
 
@@ -414,4 +414,3 @@ Dependencies: `sqflite`, `path_provider`, `path`, `uuid`, `http`, `clock`, `meta
 | Should `immediate` events bypass consent `hold`? | Proposed: **no** — consent applies uniformly. |
 | iOS apps that register plugins after launch | BGTask registration then fails; since 0.3.1 it is caught (Objective-C shim) and reported as a startup warning instead of crashing. Such apps call `BeeSyncPlugin.registerBackgroundTasks()` in `didFinishLaunching`. |
 | iOS container path changes on app update | Since 0.3.1 the database path is stored relative to the home directory. |
-| Competitive claims in the research report | Several are unverified or contradictory. Verify before using in README/marketing. |

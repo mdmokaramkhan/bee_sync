@@ -34,5 +34,14 @@ migrate_working_dir/
 /build/
 /coverage/
 
-# Research notes: kept in the repo, not shipped in the package.
+# Private research notes, kept locally only.
 /deep-research-report.md
+
+# Development-only: tests, tooling and benchmarks live in the repository,
+# not in the published package.
+/test/
+/android/src/test/
+/benchmark/
+/tool/
+/pigeons/
+/example/integration_test/

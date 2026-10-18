@@ -13,7 +13,11 @@ Fixes found by end-to-end testing on an Android emulator and real devices (see `
 * `EventStore.releaseRetry` takes an optional `countAttempt` (default `true`). Custom `EventStore` implementations need to add the parameter.
 * `spec/uploader_contract.md` §3.3: no response means a network backoff, through the new `network_failures` meta key and the `release_backoff` statement. Fixture 07 is updated and there are three new shared test cases.
 
+### Package
+* The published package no longer includes tests, the test server, benchmarks or pigeon sources. They stay in the repository.
+
 ### Docs
+* `SECURITY.md`: how to report a vulnerability privately, and bee_sync's security model.
 * `doc/background-delivery.md`: Android 14+ may defer background jobs until the device is charging or idle; they run at the latest when the app's process next starts.
 
 ## 0.3.1 — 2026-10-18

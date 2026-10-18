@@ -13,7 +13,7 @@ POST /events HTTP/1.1
 Content-Type: application/json
 Authorization: Bearer <your-ingestion-key>          (whatever headers you set)
 X-BeeSync-Batch-Id: 6f1c1a52-2f4e-4f8a-9d38-2b7c1d3e5a10
-X-BeeSync-Sdk: bee_sync/0.3.0 (android; android_worker)
+X-BeeSync-Sdk: bee_sync/0.3.2 (android; android_worker)
 Content-Encoding: gzip                              (only with HttpTransport(gzip: true))
 ```
 

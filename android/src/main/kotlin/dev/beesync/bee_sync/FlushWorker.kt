@@ -81,7 +81,15 @@ internal class FlushWorker(context: Context, params: WorkerParameters) : Worker(
         }
         // Set both when this run backed off and when it was skipped because an
         // earlier run (possibly the app's own) is still backing off.
-        val retryAt = result.retryAt
+        val retryAt = result.retryAt ?: if (result.status == RunStatus.DRAINED) {
+            // Events remain but none was claimable: another uploader holds them,
+            // typically the app, killed mid-request. Come back once that lease
+            // has expired instead of waiting for the 15-minute periodic job.
+            System.currentTimeMillis() +
+                DeliverySettings.parse(store.getMeta(MetaKeys.DELIVERY_CONFIG)).leaseMs
+        } else {
+            null
+        }
         if (retryAt != null) {
             BackgroundWork.scheduleRetry(applicationContext, retryAt - System.currentTimeMillis())
         }

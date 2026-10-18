@@ -1,0 +1,53 @@
+{
+  "description": "Network errors never use up attempts: a row one failure from max_attempts survives, and the backoff grows with network_failures.",
+  "now": 1760000000000,
+  "meta": {
+    "network_failures": "3"
+  },
+  "events": [
+    {
+      "id": "a",
+      "name": "evt",
+      "properties": {
+        "k": "a"
+      },
+      "priority": "normal",
+      "created_at": 1759999940000,
+      "attempts": 11,
+      "next_attempt_at": 0,
+      "lease_owner": null,
+      "lease_until": null
+    }
+  ],
+  "responses": [
+    {
+      "network_error": true
+    }
+  ],
+  "expect": {
+    "status": "backingOff",
+    "requests": [
+      [
+        "a"
+      ]
+    ],
+    "remaining": [
+      {
+        "id": "a",
+        "attempts": 11,
+        "next_attempt_at": {
+          "min": 1760000008000,
+          "max": 1760000016000
+        }
+      }
+    ],
+    "counters": {},
+    "meta": {
+      "network_failures": "4",
+      "flush_not_before": {
+        "min": 1760000008000,
+        "max": 1760000016000
+      }
+    }
+  }
+}

@@ -489,12 +489,36 @@ class BackgroundDeliveryTests: XCTestCase {
     StubProtocol.reply = { _, _ in .http(status: 200, headers: [:], body: Data()) }
     delivery.sender = URLSessionSender(configuration: StubProtocol.configuration())
 
-    guard case .ran(let run, let remaining) = delivery.runOnce(source: "ios_bg_exit", shouldContinue: { true })
+    guard case .ran(let run, let remaining, _) = delivery.runOnce(source: "ios_bg_exit", shouldContinue: { true })
     else { return XCTFail("expected a run") }
 
     XCTAssertEqual(run.status, .drained)
     XCTAssertEqual(remaining, 0)
     XCTAssertEqual(try db.logLines(), ["ios_bg_exit/info: drained: sent 2, dropped 0"])
+  }
+
+  func testEventsLeasedElsewhereAreRetriedWhenTheLeaseExpires() throws {
+    let db = try TestDb()
+    let now = Int64(Date().timeIntervalSince1970 * 1000)
+    // The app was suspended or killed mid-request: its lease hides the event.
+    try db.insert(id: "a", payload: Data("{}".utf8), leaseOwner: "dart:killed", leaseUntil: now + 60_000)
+    try db.store.setMeta(MetaKeys.consent, "granted")
+    try db.transport()
+    _ = delivery.configure(databasePath: db.path, enabled: true)
+    var requests = 0
+    StubProtocol.reply = { _, _ in
+      requests += 1
+      return .http(status: 200, headers: [:], body: Data())
+    }
+    delivery.sender = URLSessionSender(configuration: StubProtocol.configuration())
+
+    guard case .ran(let run, let remaining, let nextRunAt) = delivery.runOnce(source: "ios_bgtask", shouldContinue: { true })
+    else { return XCTFail("expected a run") }
+    XCTAssertEqual(requests, 0)
+    XCTAssertEqual(run.status, .drained)
+    XCTAssertEqual(remaining, 1)
+    let next = try XCTUnwrap(nextRunAt)
+    XCTAssertTrue((now + 59_000...now + 61_000).contains(next), "next run at \(next - now) ms")
   }
 
   func testRunOnceWaitsForMigrationOfOlderSchema() throws {

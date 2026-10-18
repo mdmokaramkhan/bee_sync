@@ -1,3 +1,21 @@
+## 0.3.2 (unreleased)
+
+Fixes found by end-to-end testing on an Android emulator and real devices (see `doc/test-plan.md`).
+
+### Fixed
+* **Events could be stranded when the app was killed right after going to the background.** The app scheduled native background work only after its own backgrounding flush finished. If Android killed the process while that request was still in flight, nothing was scheduled, and the events waited until the app was next opened. Background work is now scheduled first, then the app flushes, then the work is cancelled if the queue is empty.
+* **Background runs now come back when another uploader's lease expires.** When the native uploader (Android worker, iOS background task) found events still leased by the app (killed or suspended mid-request), it waited for the 15-minute periodic job on Android, or iOS's default interval. It now schedules the next run for when the lease expires (`leaseDuration`, 60 s by default).
+
+* **Events were dropped after being offline for a while.** A request that got no response at all (offline, timeout, server unreachable) counted as a failed attempt, like a 503. With the default `maxAttempts: 12`, about 20–40 minutes offline with the app open dropped every queued event as `maxAttempts`; with a lower `maxAttempts`, going to the background offline was enough. Now only responses the server sent (408, 429, 5xx) count. Network failures back off the same way without using up attempts, on all three uploaders. Offline events are still bounded by `RetentionPolicy` (7 days by default).
+
+### Changed
+* New `NetworkFailure` transport result, a subclass of `RetryableFailure`, for failures with no response. `HttpTransport` returns it for network errors and timeouts. Custom transports should return it for the same cases; a plain `RetryableFailure`, or a thrown exception, still counts an attempt.
+* `EventStore.releaseRetry` takes an optional `countAttempt` (default `true`). Custom `EventStore` implementations need to add the parameter.
+* `spec/uploader_contract.md` §3.3: no response means a network backoff, through the new `network_failures` meta key and the `release_backoff` statement. Fixture 07 is updated and there are three new shared test cases.
+
+### Docs
+* `doc/background-delivery.md`: Android 14+ may defer background jobs until the device is charging or idle; they run at the latest when the app's process next starts.
+
 ## 0.3.1 — 2026-10-18
 
 A patch release fixing issues found in a full code review: an iOS App Store privacy requirement, data loss on HTTP redirects, and a possible crash on iOS. It also adds CI.

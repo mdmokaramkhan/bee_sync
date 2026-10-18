@@ -94,10 +94,11 @@ class InMemoryEventStore implements EventStore {
     String owner,
     Iterable<String> ids, {
     required int nextAttemptAt,
+    bool countAttempt = true,
   }) async {
     for (final r in _held(owner, ids)) {
+      if (countAttempt) r.attempts += 1;
       r
-        ..attempts += 1
         ..nextAttemptAt = nextAttemptAt
         ..leaseOwner = null
         ..leaseUntil = null;

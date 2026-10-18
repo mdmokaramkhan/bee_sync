@@ -15,6 +15,7 @@ All values are TEXT.
 | `delivery_config` | Dart | JSON, §1.2 | Batching and retry settings. |
 | `flush_not_before` | any uploader | ms since epoch, decimal; `0` = none | Global backoff. |
 | `auth_blocked` | any uploader | `1` \| `0` | Set on 401/403. Cleared only by Dart (`setHeaders()` or a successful manual flush). |
+| `network_failures` | any uploader | decimal; absent or `0` = none | Consecutive requests that got no HTTP response (§3.3). Sets the backoff for network failures, which don't count attempts. |
 
 Counters live in the `counters` table: `sent`, and `dropped.<reason>`. The reasons are `overflow`, `expired`, `maxAttempts`, `rejectedByServer`, `tooLarge`, `noConsent`, `unreadable` and `purged` (written by Dart only, from `purgeQueue()`). Increment them with `ensure_counter` + `increment_counter`, in the same transaction as the matching `delete_leased`.
 
@@ -39,7 +40,7 @@ These values are also the defaults when a fixture omits `delivery_config`.
 ```
 owner = "<runtime>:<uuid v4>"          # dart: / android: / ios:
 check PRAGMA user_version == 2         # else: log to bg_log if possible, stop
-read meta
+read meta                              # including network_failures (§3.3)
 if consent_state != "granted": stop(skipped)
 if native and transport_config absent: stop(skipped)
 if auth_blocked == "1" and not manual: stop(skipped)
@@ -66,12 +67,13 @@ Native runs are never `manual`. They also stop early when the OS budget expires.
 ## 3. Sending a batch
 
 1. Decode each payload: UTF-8 JSON object. Rows that fail to decode are deleted with `delete_leased` and counted as `dropped.unreadable`. They are not sent.
-2. POST the body (§4). Classify the result:
+2. POST the body (§4). If an HTTP response arrived (any status) and `network_failures` is not `0`, `set_meta(network_failures, "0")`. Classify the result:
 
 | Result | Action |
 |---|---|
 | 2xx | `delete_leased` all. Ids in the optional body `{"rejected": [...]}` count as `dropped.rejectedByServer`, the rest as `sent`. Continue. |
-| 408, 429, ≥500, 1xx/3xx, network error, timeout | Retry (§3.1); stop(backingOff). |
+| 408, 429, ≥500, 1xx/3xx | Retry (§3.1); stop(backingOff). |
+| No HTTP response: network error, timeout, TLS failure | Network backoff (§3.3), no attempt counted; stop(backingOff). |
 | 401, 403 | `release` all (no attempt counted); stop(authBlocked). |
 | 413 | More than one row: split (§3.2). One row: delete, `dropped.tooLarge`. |
 | other 4xx | More than one row: split (§3.2). One row: delete, `dropped.rejectedByServer`. |
@@ -94,6 +96,21 @@ release_retry(retry_at, owner, ids)
 ### 3.2 Split
 
 Send the first `floor(n/2)` rows, then the rest. If the first half stops the run, `release` the second half untouched and return that stop. Before sending the second half, check whether the run should continue (the OS may be ending background time); if not, `release` the second half and stop(skipped). Requests made while splitting go out in this order: depth-first, first half first.
+
+### 3.3 Network backoff
+
+A request that got no HTTP response says nothing about the events: the phone was offline, the server unreachable, or the connection broke. Counting it as an attempt would drop events after a long offline period, so the rows keep their `attempts`. The backoff still grows, through the shared `network_failures` counter:
+
+```
+n        = network_failures + 1                       # absent or unparsable: 0
+cap      = min(retry_max_ms, retry_base_ms * 2^(n-1))
+delay    = cap/2 + uniform_int(0, cap - cap/2)        # integer division
+retry_at = now + delay
+set_meta(network_failures, n)
+release_backoff(retry_at, owner, ids)
+```
+
+Network failures alone never drop an event: only HTTP responses count toward `max_attempts`. `RetentionPolicy` (age, queue size) still applies.
 
 ## 4. Request
 

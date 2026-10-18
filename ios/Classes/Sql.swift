@@ -80,6 +80,11 @@ enum Sql {
     WHERE lease_owner = ? AND id IN ({ids})
     """
 
+  static let releaseBackoff = """
+    UPDATE events SET next_attempt_at = ?, lease_owner = NULL, lease_until = NULL
+    WHERE lease_owner = ? AND id IN ({ids})
+    """
+
   static let release = """
     UPDATE events SET lease_owner = NULL, lease_until = NULL
     WHERE lease_owner = ? AND id IN ({ids})
@@ -124,6 +129,7 @@ enum Sql {
     "select_claimed": selectClaimed,
     "delete_leased": deleteLeased,
     "release_retry": releaseRetry,
+    "release_backoff": releaseBackoff,
     "release": release,
     "get_meta": getMeta,
     "set_meta": setMeta,

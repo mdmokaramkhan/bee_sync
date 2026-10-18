@@ -95,7 +95,8 @@ track() ─► SQLite (events table) ─► FlushController ─► POST /events 
 
 | Server answer | What bee_sync does |
 |---|---|
-| 408, 429, 5xx, network error, 3xx | Counts an attempt and waits (exponential backoff, at least `Retry-After`, capped at 24 h). After 12 attempts the event is dropped. |
+| 408, 429, 5xx, 3xx | Counts an attempt and waits (exponential backoff, at least `Retry-After`, capped at 24 h). After 12 attempts the event is dropped. |
+| No response (offline, timeout, server unreachable) | Waits with the same exponential backoff, but counts **no** attempt, so being offline never drops events. |
 | 401, 403 | Keeps the events, counts no attempt, and pauses automatic uploads (app *and* background) until `setHeaders()` or a manual `flush()`. |
 | 413 | Splits the batch in half and retries; drops an event only if it's too large on its own. |
 | Other 4xx | Splits the batch to find the refused events and drops only those. |
@@ -193,7 +194,7 @@ expiration: the request is cancelled, the task completes, leases release the row
    **Expect:** Inspector → Activity: *Request failed … Network error*.
 2. Start the server again (`ok`) and wait up to 15 s.
 
-**Expect:** delivered with `attempts=2`, `duplicates=0`.
+**Expect:** delivered with `attempts=1`, `duplicates=0`. A stopped server gives no response, so the failure isn't counted as an attempt.
 
 ### B2 · 503 with Retry-After is respected
 **Where:** both · **Server:** `fail`
@@ -262,6 +263,17 @@ expiration: the request is cancelled, the task completes, leases release the row
 2. Turn airplane mode off.
 
 **Expect:** delivered within a few seconds, without waiting for the 15 s interval. Regaining connectivity resets the backoff.
+
+### B11 · Being offline never drops events
+**Where:** both · **Server:** `ok`
+1. To make a drop easy to see, set `retry: const RetryPolicy(maxAttempts: 3)` in `example/lib/main.dart`.
+2. Turn airplane mode on and tap **Track immediate**.
+3. Leave the app open for 2 minutes. Inspector → Activity shows several *Network error* failures.
+
+   **Expect:** Inspector → Queue still lists the event, with no failed attempts. Status shows Dropped 0.
+4. Turn airplane mode off.
+
+**Expect:** delivered with `attempts=1`.
 
 ### B10 · At-least-once: duplicates only after a lost response
 **Where:** Android emulator · **Server:** `slow`
@@ -436,7 +448,7 @@ e -l objc -- (void)[[BGTaskScheduler sharedScheduler] _simulateLaunchForTaskWith
 ```
 
 **Expect:**
-- `from=ios_bgtask events=5 stored=5`, with `attempts` ≥ 2 (the offline attempts were counted).
+- `from=ios_bgtask events=5 stored=5`, with `attempts=1`: failures without a response aren't counted.
 - If the events arrived from `dart` before step 4, the app delivered them on reconnect instead. Retry without waiting at step 3.
 
 ### G3 · BGProcessingTask delivers
@@ -500,7 +512,7 @@ These run in CI on every pull request. Run them locally as in [CONTRIBUTING.md](
 | Area | Covered by |
 |---|---|
 | Batching, intervals, immediate priority, background trigger | `test/core/bee_sync_test.dart` |
-| Retries, Retry-After (and its 24 h cap), max attempts, 401/413/4xx handling, splitting, rejected ids, redirects | `spec/fixtures/uploader/*.json`, run by Dart, Kotlin and Swift (20 cases × 3 seeds each) |
+| Retries, Retry-After (and its 24 h cap), max attempts, 401/413/4xx handling, splitting, rejected ids, redirects | `spec/fixtures/uploader/*.json`, run by Dart, Kotlin and Swift (23 cases × 3 seeds each) |
 | Consent (hold, drop, deny, persistence), retention (count, size, age), invalid events | `test/core/bee_sync_test.dart` |
 | SQLite store, leases, migration from schema v1, WAL | `test/store/` |
 | Wire format, gzip, HTTP status mapping | `test/transport/`, `NativeUploaderTest.kt`, `RunnerTests.swift` |

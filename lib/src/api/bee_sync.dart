@@ -455,13 +455,23 @@ class BeeSync implements FlushListener {
 
   Future<void> _onBackgrounded() async {
     if (_closed) return;
+    // Schedule before flushing: the OS often kills a backgrounded app while
+    // that flush is still waiting on the network, and nothing would then be
+    // scheduled to deliver what's left.
+    await _syncBackgroundSchedule(cancelWhenEmpty: false);
     await _flush();
+    await _syncBackgroundSchedule(cancelWhenEmpty: true);
+  }
+
+  /// Schedules native background work while events remain; with
+  /// [cancelWhenEmpty], cancels it once the queue is empty.
+  Future<void> _syncBackgroundSchedule({required bool cancelWhenEmpty}) async {
     if (!_backgroundEnabled || _closed) return;
     try {
       final remaining = await _store.totals(clock.now().millisecondsSinceEpoch);
       if (remaining.total > 0) {
         await _background.schedule();
-      } else {
+      } else if (cancelWhenEmpty) {
         await _background.cancel();
       }
     } catch (e, st) {
@@ -758,6 +768,6 @@ class _SwitchableTransport implements EventTransport {
 
   @override
   Future<TransportResult> send(EventBatch batch) async => _offline()
-      ? const RetryableFailure('Simulated offline')
+      ? const NetworkFailure('Simulated offline')
       : _inner.send(batch);
 }

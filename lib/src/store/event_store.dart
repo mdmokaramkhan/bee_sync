@@ -110,12 +110,13 @@ abstract interface class EventStore {
     Map<String, int> counters = const {},
   });
 
-  /// Returns leased events to the queue, counting a failed attempt and
-  /// deferring them until [nextAttemptAt].
+  /// Returns leased events to the queue, deferring them until
+  /// [nextAttemptAt] and, when [countAttempt], counting a failed attempt.
   Future<void> releaseRetry(
     String owner,
     Iterable<String> ids, {
     required int nextAttemptAt,
+    bool countAttempt = true,
   });
 
   /// Returns leased events to the queue untouched.
@@ -170,6 +171,7 @@ abstract final class MetaKeys {
   static const deliveryConfig = 'delivery_config';
   static const flushNotBefore = 'flush_not_before';
   static const authBlocked = 'auth_blocked';
+  static const networkFailures = 'network_failures';
 }
 
 /// Counter keys shared with the native uploaders.

@@ -41,7 +41,7 @@ Content-Encoding: gzip                              (only with HttpTransport(gzi
 | `events[].id` | UUIDv7, the same on every retry. **Deduplicate on this.** |
 | `events[].timestamp` | Device time when `track()` was called (ms since epoch, UTC). |
 | `events[].priority` | `normal` or `immediate`. |
-| `events[].attempt` | 1 on the first try, then 2, 3, … on retries. |
+| `events[].attempt` | 1 on the first try, then 2, 3, … after each retryable response (408, 429, 5xx). Network failures aren't counted. |
 | `events[].properties` | The JSON object passed to `track()`. |
 
 **Clock skew:** device clocks can be wrong. To correct a timestamp, use `timestamp + (server_now - sent_at)`.
@@ -58,7 +58,8 @@ The `X-BeeSync-Sdk` header says which uploader sent the request:
 |---|---|
 | **2xx** | Marks the whole batch delivered. |
 | 2xx with `{"rejected": ["<id>", …]}` | Delivers the rest and drops the listed events, e.g. ones that fail your validation. |
-| 408, 429, 5xx, or no response | Retries with exponential backoff, honouring `Retry-After` (seconds or an HTTP date). |
+| 408, 429, 5xx | Retries with exponential backoff, honouring `Retry-After` (seconds or an HTTP date). Drops the event after `maxAttempts` (12) such responses. |
+| No response (offline, timeout) | Retries with exponential backoff, without counting an attempt. |
 | 401, 403 | Keeps the events and pauses uploads until the app sets new headers. |
 | 413 | Splits the batch in half and retries; drops a single event only if it's too large on its own. |
 | Other 4xx | Splits the batch to find and drop only the events you refuse. |

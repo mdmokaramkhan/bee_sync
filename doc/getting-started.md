@@ -76,7 +76,7 @@ Future<void> main() async {
 
 `BeeSync.instance` is then available everywhere. The defaults suit most apps:
 - batches of up to 100 events, sent when 20 are waiting or every 30 seconds;
-- retries for up to 12 attempts;
+- retries for up to 12 failed responses, and indefinitely while offline;
 - the queue keeps at most 10,000 events or 10 MB, for up to 7 days.
 
 All of it is adjustable; see [Configuration](configuration.md).

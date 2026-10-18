@@ -77,6 +77,10 @@ UPDATE events
 SET attempts = attempts + 1, next_attempt_at = ?, lease_owner = NULL, lease_until = NULL
 WHERE lease_owner = ? AND id IN ({ids})''';
 
+const String releaseBackoff = '''
+UPDATE events SET next_attempt_at = ?, lease_owner = NULL, lease_until = NULL
+WHERE lease_owner = ? AND id IN ({ids})''';
+
 const String release = '''
 UPDATE events SET lease_owner = NULL, lease_until = NULL
 WHERE lease_owner = ? AND id IN ({ids})''';

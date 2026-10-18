@@ -127,6 +127,21 @@ class FlushWorkerTest {
         assertEquals(WorkInfo.State.ENQUEUED, state(BackgroundWork.RETRY))
     }
 
+    @Test fun eventsLeasedByTheAppAreRetriedWhenTheLeaseExpires() {
+        // The app was killed mid-request: its lease still hides the event.
+        db.insert(
+            id = "a",
+            payload = "{}".toByteArray(),
+            leaseOwner = "dart:killed",
+            leaseUntil = System.currentTimeMillis() + 60_000,
+        )
+
+        runWorker()
+
+        assertEquals(0, server.requestCount)
+        assertEquals(WorkInfo.State.ENQUEUED, state(BackgroundWork.RETRY))
+    }
+
     @Test fun doesNothingWhenDisabled() {
         configure(enabled = false)
         db.insert(id = "a", payload = "{}".toByteArray())

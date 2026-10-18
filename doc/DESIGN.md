@@ -197,7 +197,7 @@ Any uploader (Dart foreground, Android worker, iOS task) follows the same four s
    Then trim to `maxBatchBytes` and release the overflow.
 2. **Send** — outside any transaction.
 3. **Ack** on success: `DELETE FROM events WHERE lease_owner = :owner AND id NOT IN (:rejected)`; rejected ids are dropped with reason `rejectedByServer`.
-4. **Release** on failure: increment `attempts`, set `next_attempt_at` per backoff, clear lease. Events at `maxAttempts` are dropped (`maxAttempts`).
+4. **Release** on failure: increment `attempts` (only when the server responded), set `next_attempt_at` per backoff, clear lease. Events at `maxAttempts` are dropped (`maxAttempts`).
 
 Properties:
 - **No double send under normal operation:** a live lease excludes other uploaders.
@@ -209,7 +209,8 @@ Properties:
 | Response | Class | Action |
 |---|---|---|
 | 2xx | Success | Ack (minus per-event rejects if the body lists them) |
-| 408, 429, 5xx, network error, timeout | Retryable | Release with backoff; honor `Retry-After`; set global `flush_not_before` so all uploaders back off together |
+| 408, 429, 5xx | Retryable | Release with backoff; honor `Retry-After`; set global `flush_not_before` so all uploaders back off together |
+| No response (network error, timeout) | Network | Release with backoff **without** consuming an attempt, so long offline periods never drop events; the backoff grows with the shared `network_failures` count, reset by any HTTP response |
 | 401, 403 | Auth | Release **without** consuming an attempt; background uploaders stop and wait for the foreground to call `setHeaders()` |
 | 413 | Too large | Split batch in half and retry; single event → drop (`tooLarge`) |
 | other 4xx | Permanent | Batch > 1 → **bisect** to isolate the poison event(s); single event → drop (`rejectedByServer`) |

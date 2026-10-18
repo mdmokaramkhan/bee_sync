@@ -21,6 +21,7 @@ internal object MetaKeys {
     const val DELIVERY_CONFIG = "delivery_config"
     const val FLUSH_NOT_BEFORE = "flush_not_before"
     const val AUTH_BLOCKED = "auth_blocked"
+    const val NETWORK_FAILURES = "network_failures"
 }
 
 internal object CounterKeys {
@@ -124,7 +125,9 @@ internal class NativeUploader(
             }
         }
 
-        val result = Run(transport, settings, shouldContinue).drain()
+        val networkFailures =
+            (store.getMeta(MetaKeys.NETWORK_FAILURES)?.toIntOrNull() ?: 0).coerceAtLeast(0)
+        val result = Run(transport, settings, shouldContinue, networkFailures).drain()
         when (result.status) {
             RunStatus.DRAINED -> {
                 if (notBefore != 0L) store.setMeta(MetaKeys.FLUSH_NOT_BEFORE, "0")
@@ -149,6 +152,9 @@ internal class NativeUploader(
     private sealed class SendResult {
         class Success(val rejected: Set<String>) : SendResult()
         class Retryable(val reason: String, val retryAfterMs: Long?) : SendResult()
+
+        /** No HTTP response: offline, timeout, TLS, unreachable. */
+        class Network(val reason: String) : SendResult()
         class Auth(val reason: String) : SendResult()
         object TooLarge : SendResult()
         class Permanent(val reason: String) : SendResult()
@@ -158,6 +164,8 @@ internal class NativeUploader(
         val transport: TransportConfig,
         val settings: DeliverySettings,
         val keepGoing: () -> Boolean,
+        /** The shared `network_failures` count (§3.3). */
+        var networkFailures: Int,
     ) {
 
         fun drain(): RunResult {
@@ -200,7 +208,13 @@ internal class NativeUploader(
             if (readable.isEmpty()) return Outcome()
             val rows = readable.map { it.first }
 
-            return when (val result = post(readable)) {
+            val result = post(readable)
+            if (result !is SendResult.Network && networkFailures != 0) {
+                // The server answered, so the network is back (§3).
+                networkFailures = 0
+                store.setMeta(MetaKeys.NETWORK_FAILURES, "0")
+            }
+            return when (result) {
                 is SendResult.Success -> {
                     val ids = rows.map { it.id }
                     val rejected = ids.filter { it in result.rejected }
@@ -217,6 +231,7 @@ internal class NativeUploader(
                     Outcome(delivered = accepted)
                 }
                 is SendResult.Retryable -> retry(rows, result)
+                is SendResult.Network -> networkBackoff(rows, result)
                 is SendResult.Auth -> {
                     store.release(owner, rows.map { it.id })
                     Outcome(stop = RunStatus.AUTH_BLOCKED, error = result.reason)
@@ -268,6 +283,15 @@ internal class NativeUploader(
             return Outcome(stop = RunStatus.BACKING_OFF, retryAt = retryAt, error = failure.reason)
         }
 
+        /** §3.3: back off on the shared failure count, without counting an attempt. */
+        private fun networkBackoff(events: List<StoredEvent>, failure: SendResult.Network): Outcome {
+            val n = ++networkFailures
+            val retryAt = clock() + backoffDelay(n)
+            store.setMeta(MetaKeys.NETWORK_FAILURES, "$n")
+            store.releaseBackoff(owner, events.map { it.id }, retryAt)
+            return Outcome(stop = RunStatus.BACKING_OFF, retryAt = retryAt, error = failure.reason)
+        }
+
         /** §3.1: equal jitter in [cap/2, cap]. */
         private fun backoffDelay(attempt: Int): Long {
             val exp = (attempt - 1).coerceIn(0, 30)
@@ -316,7 +340,7 @@ internal class NativeUploader(
                 sender.post(transport.endpoint, headers, bytes, transport.timeoutMs)
             } catch (e: Exception) {
                 // IOException (offline, timeout, TLS) and malformed endpoints alike.
-                return SendResult.Retryable("Network error: ${e.javaClass.simpleName}", null)
+                return SendResult.Network("Network error: ${e.javaClass.simpleName}")
             }
             return classify(response, clock())
         }

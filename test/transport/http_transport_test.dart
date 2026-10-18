@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
@@ -78,12 +79,21 @@ void main() {
       expect((body as Map)['batch_id'], 'batch-1');
     });
 
-    test('network errors are retryable', () async {
+    test('network errors are network failures', () async {
       final transport = HttpTransport(
         endpoint: Uri.parse('https://example.com/e'),
         client: MockClient((_) => throw const SocketException('offline')),
       );
-      expect(await transport.send(batchOf(['a'])), isA<RetryableFailure>());
+      expect(await transport.send(batchOf(['a'])), isA<NetworkFailure>());
+    });
+
+    test('timeouts are network failures', () async {
+      final transport = HttpTransport(
+        endpoint: Uri.parse('https://example.com/e'),
+        timeout: const Duration(milliseconds: 10),
+        client: MockClient((_) => Completer<http.Response>().future),
+      );
+      expect(await transport.send(batchOf(['a'])), isA<NetworkFailure>());
     });
 
     test('headers can be replaced and are mirrored in config json', () {
@@ -128,6 +138,7 @@ void main() {
     test('408, 429 and 5xx are retryable and honour Retry-After', () {
       expect(classify(408), isA<RetryableFailure>());
       expect(classify(503), isA<RetryableFailure>());
+      expect(classify(503), isNot(isA<NetworkFailure>()));
       final r = classify(429, retryAfter: '120') as RetryableFailure;
       expect(r.retryAfter, const Duration(seconds: 120));
     });

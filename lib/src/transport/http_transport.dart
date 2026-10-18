@@ -77,10 +77,10 @@ class HttpTransport implements EventTransport {
           .then(http.Response.fromStream)
           .timeout(timeout);
     } on TimeoutException {
-      return RetryableFailure('Timed out after ${timeout.inSeconds}s');
+      return NetworkFailure('Timed out after ${timeout.inSeconds}s');
     } on Exception catch (e) {
       // SocketException, http.ClientException, TLS errors, ...
-      return RetryableFailure('Network error: $e');
+      return NetworkFailure('Network error: $e');
     }
     return classify(response.statusCode, response.headers, response.body);
   }

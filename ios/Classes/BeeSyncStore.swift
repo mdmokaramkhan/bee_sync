@@ -96,6 +96,12 @@ final class BeeSyncStore {
     try execute(Sql.expandIds(Sql.releaseRetry, count: ids.count), [nextAttemptAt, owner] + ids.map { $0 as Value })
   }
 
+  /// Like `releaseRetry` but without counting an attempt (no HTTP response).
+  func releaseBackoff(owner: String, ids: [String], nextAttemptAt: Int64) throws {
+    if ids.isEmpty { return }
+    try execute(Sql.expandIds(Sql.releaseBackoff, count: ids.count), [nextAttemptAt, owner] + ids.map { $0 as Value })
+  }
+
   func release(owner: String, ids: [String]) throws {
     if ids.isEmpty { return }
     try execute(Sql.expandIds(Sql.release, count: ids.count), [owner] + ids.map { $0 as Value })

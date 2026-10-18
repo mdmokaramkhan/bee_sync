@@ -1,5 +1,5 @@
 {
-  "description": "A network error is retryable.",
+  "description": "A network error backs off without counting an attempt.",
   "now": 1760000000000,
   "events": [
     {
@@ -31,13 +31,20 @@
     "remaining": [
       {
         "id": "a",
-        "attempts": 1,
+        "attempts": 0,
         "next_attempt_at": {
           "min": 1760000001000,
           "max": 1760000002000
         }
       }
     ],
-    "counters": {}
+    "counters": {},
+    "meta": {
+      "network_failures": "1",
+      "flush_not_before": {
+        "min": 1760000001000,
+        "max": 1760000002000
+      }
+    }
   }
 }

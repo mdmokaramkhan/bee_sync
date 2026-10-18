@@ -20,7 +20,11 @@ bee_sync schedules three WorkManager jobs, each needing a network connection:
 | `bee_sync_retry` | Once, when a server backoff ends (honours `Retry-After`) |
 | `bee_sync_periodic` | Every 15 minutes (the Android minimum) while events remain; cancelled once the queue is empty |
 
-If the app process is gone, Android starts it just for the job, without the UI or Flutter. Verified on an emulator: events queued during a server outage were delivered about 40 s after the process was killed.
+If the app process is gone, Android starts it just for the job, without the UI or Flutter. Verified on an emulator: events queued during a server outage were delivered about 45 s after the process was killed, and 7 s after the network returned when they were queued offline.
+
+If the app is killed while an upload is in flight, the events stay leased for 60 s (`leaseDuration`). The worker schedules its next run for when that lease expires. The server may then receive those events twice, which is the at-least-once trade-off.
+
+**Android 14+ timing:** Android can defer background jobs until the device is charging or idle, so a retry may take minutes. Deferred jobs run at the latest when the app's process next starts.
 
 ## iOS
 

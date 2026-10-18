@@ -143,10 +143,12 @@ class SqfliteEventStore implements EventStore {
     String owner,
     Iterable<String> ids, {
     required int nextAttemptAt,
+    bool countAttempt = true,
   }) async {
     final list = ids.toList();
     if (list.isEmpty) return;
-    await _database.rawUpdate(sql.expandIds(sql.releaseRetry, list.length), [
+    final statement = countAttempt ? sql.releaseRetry : sql.releaseBackoff;
+    await _database.rawUpdate(sql.expandIds(statement, list.length), [
       nextAttemptAt,
       owner,
       ...list,

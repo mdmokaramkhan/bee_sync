@@ -282,6 +282,30 @@ void main() {
       expect(rig.stats.dropped[DropReason.maxAttempts], 1);
     });
 
+    rigTest('network failures never use up attempts', (rig) {
+      rig.start(
+        retry: const RetryPolicy(
+          base: Duration(seconds: 1),
+          max: Duration(seconds: 1),
+          maxAttempts: 3,
+        ),
+        batching: const BatchingPolicy(flushInterval: Duration(seconds: 5)),
+      );
+      rig.transport.fallback = (_) => const NetworkFailure('offline');
+      final id = rig.track('a');
+      rig.elapse(const Duration(seconds: 30));
+      expect(rig.transport.batches.length, greaterThan(3));
+      expect(rig.droppedIds(DropReason.maxAttempts), isEmpty);
+      expect(rig.stored, 1);
+
+      rig.transport.fallback = (_) => const Success();
+      rig.elapse(const Duration(seconds: 10));
+      expect(rig.stored, 0);
+      final last = rig.transport.batches.last.events.single;
+      expect(last.id, id);
+      expect(last.attempt, 1);
+    });
+
     rigTest('auth failure pauses automatic flushes without using attempts', (
       rig,
     ) {
@@ -575,8 +599,24 @@ void main() {
       rig.track('a');
       rig.signals.background();
       rig.elapse(const Duration(seconds: 1));
-      expect(bg.scheduled, 1);
+      expect(bg.scheduled, greaterThanOrEqualTo(1));
       expect(bg.cancelled, 0);
+    });
+
+    bgTest('schedules before the backgrounding flush finishes', (rig, bg) {
+      // The server hasn't answered yet when the OS kills the app.
+      final response = Completer<http.Response>();
+      final hang = HttpTransport(
+        endpoint: Uri.parse('https://example.test/events'),
+        client: MockClient((_) => response.future),
+      );
+      rig.start(transportOverride: hang, background: bg);
+      rig.track('a');
+      rig.signals.background();
+      rig.elapse(const Duration(milliseconds: 10));
+      expect(bg.scheduled, 1, reason: 'scheduled while the flush is pending');
+
+      response.complete(http.Response('', 200)); // let close() finish
     });
 
     bgTest('cancels on backgrounding once the queue is empty', (rig, bg) {
@@ -584,7 +624,8 @@ void main() {
       rig.track('a');
       rig.signals.background();
       rig.elapse(const Duration(seconds: 1));
-      expect(bg.scheduled, 0);
+      // Scheduled first (an event was pending), cancelled once delivered.
+      expect(bg.scheduled, 1);
       expect(bg.cancelled, 1);
       expect(rig.stats.sent, 1);
     });

@@ -93,6 +93,15 @@ internal class BeeSyncStore private constructor(private val db: SQLiteDatabase) 
         )
     }
 
+    /** Like [releaseRetry] but without counting an attempt (no HTTP response). */
+    fun releaseBackoff(owner: String, ids: List<String>, nextAttemptAt: Long) {
+        if (ids.isEmpty()) return
+        db.execSQL(
+            Sql.expandIds(Sql.RELEASE_BACKOFF, ids.size),
+            arrayOf<Any>(nextAttemptAt, owner, *ids.toTypedArray()),
+        )
+    }
+
     fun release(owner: String, ids: List<String>) {
         if (ids.isEmpty()) return
         db.execSQL(Sql.expandIds(Sql.RELEASE, ids.size), arrayOf<Any>(owner, *ids.toTypedArray()))

@@ -47,6 +47,7 @@ void main() {
       'select_claimed': normalize(sql.selectClaimed),
       'delete_leased': normalize(sql.deleteLeased),
       'release_retry': normalize(sql.releaseRetry),
+      'release_backoff': normalize(sql.releaseBackoff),
       'release': normalize(sql.release),
       'get_meta': normalize(sql.getMeta),
       'set_meta': normalize(sql.setMeta),

@@ -159,7 +159,9 @@ final class BackgroundDelivery {
     case waitingForMigration
     /// The run threw (e.g. the database was busy); try again later.
     case failed
-    case ran(RunResult, remaining: Int64)
+    /// `nextRunAt` (ms): when to run again if events remain, or nil for the
+    /// default interval.
+    case ran(RunResult, remaining: Int64, nextRunAt: Int64?)
   }
 
   private func observeBackgrounding() {
@@ -220,7 +222,7 @@ final class BackgroundDelivery {
       guard let self = self else { return complete(false) }
       let outcome = self.runOnce(source: source, shouldContinue: { !stopped.value })
       self.scheduleFollowUp(outcome)
-      if case .ran(let run, _) = outcome {
+      if case .ran(let run, _, _) = outcome {
         complete(run.status == .drained)
       } else {
         complete(false)
@@ -236,14 +238,14 @@ final class BackgroundDelivery {
       break
     case .failed:
       schedule()
-    case .ran(let run, let remaining):
+    case .ran(let run, let remaining, let nextRunAt):
       if remaining == 0 {
         cancel()
       } else if run.status == .skipped, run.error == "auth" || run.error == "consent" {
         // Only the app can clear these; it reschedules when it next runs.
         break
       } else {
-        schedule(earliest: run.retryAt.map { Date(timeIntervalSince1970: TimeInterval($0) / 1000) })
+        schedule(earliest: nextRunAt.map { Date(timeIntervalSince1970: TimeInterval($0) / 1000) })
       }
     }
   }
@@ -266,7 +268,16 @@ final class BackgroundDelivery {
       let result = try NativeUploader(store: store, sender: sender, source: source)
         .run(shouldContinue: shouldContinue)
       try Self.logResult(store, source: source, result)
-      return .ran(result, remaining: try store.countEvents())
+      let remaining = try store.countEvents()
+      var nextRunAt = result.retryAt
+      if nextRunAt == nil, result.status == .drained, remaining > 0 {
+        // Events remain but none was claimable: another uploader holds them,
+        // typically the app, suspended or killed mid-request. Come back once
+        // that lease has expired.
+        let leaseMs = DeliverySettings.parse(try store.getMeta(MetaKeys.deliveryConfig)).leaseMs
+        nextRunAt = Int64(Date().timeIntervalSince1970 * 1000) + leaseMs
+      }
+      return .ran(result, remaining: remaining, nextRunAt: nextRunAt)
     } catch {
       os_log("bee_sync: background upload failed: %{public}@", log: log, type: .error,
              String(describing: error))

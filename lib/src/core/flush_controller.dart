@@ -92,6 +92,9 @@ class FlushController {
   /// The current run's [run] `shouldContinue`, also checked while splitting.
   bool Function() _keepGoing = () => true;
 
+  /// The shared `network_failures` count, read when a run starts.
+  int _networkFailures = 0;
+
   /// Runs one upload pass.
   ///
   /// A [manual] run ignores the global backoff and the auth block (the app
@@ -121,6 +124,10 @@ class FlushController {
       }
     }
 
+    _networkFailures = max(
+      0,
+      int.tryParse(await _store.getMeta(MetaKeys.networkFailures) ?? '') ?? 0,
+    );
     final result = await _drain(immediateOnly, keepGoing);
     switch (result.status) {
       case FlushStatus.drained:
@@ -220,6 +227,11 @@ class FlushController {
       return _retry(readable, failure);
     }
     _listener?.onRequest(batch, result, stopwatch.elapsed);
+    if (result is! NetworkFailure && _networkFailures != 0) {
+      // The server answered, so the network is back (§3).
+      _networkFailures = 0;
+      await _store.setMeta(MetaKeys.networkFailures, '0');
+    }
 
     switch (result) {
       case Success(:final rejectedIds):
@@ -292,6 +304,7 @@ class FlushController {
     List<StoredEvent> events,
     RetryableFailure failure,
   ) async {
+    if (failure is NetworkFailure) return _networkBackoff(events, failure);
     final now = clock.now();
     final exhausted = <String>[];
     final retry = <String>[];
@@ -320,6 +333,33 @@ class FlushController {
     _log.log(
       LogLevel.info,
       'Flush failed (${failure.reason}); retrying in ${delay.inSeconds}s',
+    );
+    return _Outcome(
+      stop: FlushStatus.backingOff,
+      retryAt: retryAt,
+      error: failure.reason,
+    );
+  }
+
+  /// No response: backs off on the shared failure count without counting an
+  /// attempt, so a long time offline never drops events (§3.3).
+  Future<_Outcome> _networkBackoff(
+    List<StoredEvent> events,
+    NetworkFailure failure,
+  ) async {
+    final n = ++_networkFailures;
+    final delay = _settings.retry.delayAfter(n, _random);
+    final retryAt = clock.now().add(delay);
+    await _store.setMeta(MetaKeys.networkFailures, '$n');
+    await _store.releaseRetry(
+      _owner,
+      [for (final e in events) e.id],
+      nextAttemptAt: retryAt.millisecondsSinceEpoch,
+      countAttempt: false,
+    );
+    _log.log(
+      LogLevel.info,
+      'No response (${failure.reason}); retrying in ${delay.inSeconds}s',
     );
     return _Outcome(
       stop: FlushStatus.backingOff,

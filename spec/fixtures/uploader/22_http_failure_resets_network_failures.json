@@ -1,0 +1,55 @@
+{
+  "description": "Any HTTP response resets network_failures; a 503 counts an attempt and backs off on attempts as usual.",
+  "now": 1760000000000,
+  "meta": {
+    "network_failures": "5"
+  },
+  "events": [
+    {
+      "id": "a",
+      "name": "evt",
+      "properties": {
+        "k": "a"
+      },
+      "priority": "normal",
+      "created_at": 1759999940000,
+      "attempts": 0,
+      "next_attempt_at": 0,
+      "lease_owner": null,
+      "lease_until": null
+    }
+  ],
+  "responses": [
+    {
+      "status": 503,
+      "headers": {},
+      "body": ""
+    }
+  ],
+  "expect": {
+    "status": "backingOff",
+    "requests": [
+      [
+        "a"
+      ]
+    ],
+    "remaining": [
+      {
+        "id": "a",
+        "attempts": 1,
+        "next_attempt_at": {
+          "min": 1760000001000,
+          "max": 1760000002000
+        }
+      }
+    ],
+    "counters": {},
+    "meta": {
+      "network_failures": "0",
+      "flush_not_before": {
+        "min": 1760000001000,
+        "max": 1760000002000
+      }
+    }
+  }
+}

@@ -9,6 +9,7 @@ enum MetaKeys {
   static let deliveryConfig = "delivery_config"
   static let flushNotBefore = "flush_not_before"
   static let authBlocked = "auth_blocked"
+  static let networkFailures = "network_failures"
 }
 
 enum CounterKeys {
@@ -99,6 +100,8 @@ final class NativeUploader {
   private let owner = "ios:\(UUID().uuidString.lowercased())"
   private var dropped = 0
   private var keepGoing: () -> Bool = { true }
+  /// The shared `network_failures` count (§3.3), read when a run starts.
+  private var networkFailures = 0
 
   init(
     store: BeeSyncStore,
@@ -136,6 +139,7 @@ final class NativeUploader {
       }
     }
 
+    networkFailures = max(0, Int(try store.getMeta(MetaKeys.networkFailures) ?? "") ?? 0)
     let result = try drain(transport, settings, keepGoing)
     switch result.status {
     case .drained:
@@ -161,9 +165,16 @@ final class NativeUploader {
   private enum SendResult {
     case success(rejected: Set<String>)
     case retryable(reason: String, retryAfterMs: Int64?)
+    /// No HTTP response: offline, timeout, TLS, unreachable, cancelled.
+    case network(reason: String)
     case auth(reason: String)
     case tooLarge
     case permanent(reason: String)
+
+    var isNetwork: Bool {
+      if case .network = self { return true }
+      return false
+    }
   }
 
   private func drain(
@@ -216,7 +227,13 @@ final class NativeUploader {
     if readable.isEmpty { return Outcome() }
     let rows = readable.map(\.0)
 
-    switch post(readable, transport) {
+    let result = post(readable, transport)
+    if !result.isNetwork && networkFailures != 0 {
+      // The server answered, so the network is back (§3).
+      networkFailures = 0
+      try store.setMeta(MetaKeys.networkFailures, "0")
+    }
+    switch result {
     case .success(let rejected):
       let ids = rows.map(\.id)
       let rejectedIds = ids.filter { rejected.contains($0) }
@@ -230,6 +247,8 @@ final class NativeUploader {
       return Outcome(delivered: accepted)
     case .retryable(let reason, let retryAfterMs):
       return try retry(rows, settings, reason, retryAfterMs)
+    case .network(let reason):
+      return try networkBackoff(rows, settings, reason)
     case .auth(let reason):
       try store.release(owner: owner, ids: rows.map(\.id))
       return Outcome(stop: .authBlocked, error: reason)
@@ -289,6 +308,17 @@ final class NativeUploader {
     return Outcome(stop: .backingOff, retryAt: retryAt, error: reason)
   }
 
+  /// §3.3: back off on the shared failure count, without counting an attempt.
+  private func networkBackoff(
+    _ events: [StoredEvent], _ settings: DeliverySettings, _ reason: String
+  ) throws -> Outcome {
+    networkFailures += 1
+    let retryAt = clock() + backoffDelay(networkFailures, settings)
+    try store.setMeta(MetaKeys.networkFailures, "\(networkFailures)")
+    try store.releaseBackoff(owner: owner, ids: events.map(\.id), nextAttemptAt: retryAt)
+    return Outcome(stop: .backingOff, retryAt: retryAt, error: reason)
+  }
+
   /// §3.1: equal jitter in [cap/2, cap].
   private func backoffDelay(_ attempt: Int, _ settings: DeliverySettings) -> Int64 {
     let exp = Int64(min(max(attempt - 1, 0), 30))
@@ -344,7 +374,7 @@ final class NativeUploader {
         url: transport.endpoint, headers: headers, body: data,
         timeout: TimeInterval(transport.timeoutMs) / 1000)
     } catch {
-      return .retryable(reason: "Network error: \((error as NSError).code)", retryAfterMs: nil)
+      return .network(reason: "Network error: \((error as NSError).code)")
     }
     return classify(response)
   }

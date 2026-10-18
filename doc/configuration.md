@@ -56,9 +56,11 @@ Uploads also start when the app goes to the background, when connectivity return
 |---|---|---|
 | `base` | 2 s | First retry delay. |
 | `max` | 10 min | Longest delay. |
-| `maxAttempts` | `12` | After this many failures, an event is dropped (`DropReason.maxAttempts`). |
+| `maxAttempts` | `12` | After this many failed responses, an event is dropped (`DropReason.maxAttempts`). |
 
 Delays double on each attempt, with some randomness so many devices don't retry at once. A server `Retry-After` header wins if it's longer.
+
+Only failures the server answered count toward `maxAttempts` (408, 429, 5xx). When there's no response (offline, timeout, server unreachable), bee_sync backs off the same way but counts no attempt, so a long time offline never drops events. They are still bounded by `RetentionPolicy` (7 days by default).
 
 ## Retention
 

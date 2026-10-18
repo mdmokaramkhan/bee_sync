@@ -6,7 +6,7 @@ import '../api/models.dart';
 /// is done natively and requires `HttpTransport`.
 abstract interface class EventTransport {
   /// Sends one batch. Report failures through the returned result; a thrown
-  /// exception is treated as a [RetryableFailure].
+  /// exception is treated as a [RetryableFailure] that counts an attempt.
   Future<TransportResult> send(EventBatch batch);
 }
 
@@ -22,13 +22,21 @@ class Success extends TransportResult {
   final Set<String> rejectedIds;
 }
 
-/// Temporary failure (network, timeout, 408, 429, 5xx). Events are retried
-/// with backoff, no sooner than [retryAfter] if given.
+/// Temporary failure (408, 429, 5xx). Events are retried with backoff, no
+/// sooner than [retryAfter] if given, and dropped after
+/// `RetryPolicy.maxAttempts` failures.
 class RetryableFailure extends TransportResult {
   const RetryableFailure(this.reason, {this.retryAfter});
 
   final String reason;
   final Duration? retryAfter;
+}
+
+/// No response from the server: offline, unreachable, timed out, or the
+/// connection failed. Events are retried with backoff but no attempt is
+/// counted, so being offline for a long time never drops them.
+class NetworkFailure extends RetryableFailure {
+  const NetworkFailure(super.reason);
 }
 
 /// Credentials were refused (401/403). Events stay queued without using up

@@ -75,6 +75,10 @@ UPDATE events
 SET attempts = attempts + 1, next_attempt_at = ?, lease_owner = NULL, lease_until = NULL
 WHERE lease_owner = ? AND id IN ({ids})"""
 
+    const val RELEASE_BACKOFF = """
+UPDATE events SET next_attempt_at = ?, lease_owner = NULL, lease_until = NULL
+WHERE lease_owner = ? AND id IN ({ids})"""
+
     const val RELEASE = """
 UPDATE events SET lease_owner = NULL, lease_until = NULL
 WHERE lease_owner = ? AND id IN ({ids})"""
@@ -116,6 +120,7 @@ WHERE lease_owner = ? AND id IN ({ids})"""
         "select_claimed" to SELECT_CLAIMED,
         "delete_leased" to DELETE_LEASED,
         "release_retry" to RELEASE_RETRY,
+        "release_backoff" to RELEASE_BACKOFF,
         "release" to RELEASE,
         "get_meta" to GET_META,
         "set_meta" to SET_META,

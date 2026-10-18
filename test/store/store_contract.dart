@@ -137,6 +137,25 @@ void runStoreContract(String label, Future<EventStore> Function() create) {
       expect(e.attempts, 1);
     });
 
+    test('releaseRetry without countAttempt only defers the event', () async {
+      await add('1');
+      await claimIds(a);
+      await store.releaseRetry(
+        a,
+        ['1'],
+        nextAttemptAt: 500,
+        countAttempt: false,
+      );
+      expect(await claimIds(b, now: 499), isEmpty);
+      final e = (await store.claim(
+        owner: b,
+        now: 500,
+        leaseUntil: 500 + lease,
+        limit: 10,
+      )).single;
+      expect(e.attempts, 0);
+    });
+
     test('release returns events untouched', () async {
       await add('1');
       await claimIds(a);

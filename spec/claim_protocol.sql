@@ -1,7 +1,8 @@
 -- bee_sync claim protocol. See doc/DESIGN.md §5.
 --
 -- Every uploader (Dart foreground, Android worker, iOS background task) moves
--- events through: claim -> send -> delete_leased | release_retry | release.
+-- events through: claim -> send -> delete_leased | release_retry |
+-- release_backoff | release.
 -- A live lease (lease_until >= now) hides an event from other uploaders; an
 -- expired lease makes it claimable again (at-least-once delivery).
 --
@@ -39,6 +40,12 @@ DELETE FROM events WHERE lease_owner = ? AND id IN ({ids});
 -- Failed attempt: count it and back off.
 UPDATE events
 SET attempts = attempts + 1, next_attempt_at = ?, lease_owner = NULL, lease_until = NULL
+WHERE lease_owner = ? AND id IN ({ids});
+
+-- name: release_backoff
+-- params: next_attempt_at, owner, {ids}
+-- No HTTP response (offline, timeout): back off without counting an attempt.
+UPDATE events SET next_attempt_at = ?, lease_owner = NULL, lease_until = NULL
 WHERE lease_owner = ? AND id IN ({ids});
 
 -- name: release

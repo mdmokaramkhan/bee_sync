@@ -88,7 +88,7 @@ dart run tool/test_server.dart --mode fail
 cd example && flutter run --dart-define=BEE_ENDPOINT=http://10.0.2.2:8080/events --dart-define=BEE_DEMO_EVENTS=3
 ```
 
-Use `localhost` instead of `10.0.2.2` on the iOS Simulator. [Background delivery → Testing](doc/background-delivery.md#testing) covers the background paths.
+Use `localhost` instead of `10.0.2.2` on the iOS Simulator. [doc/test-plan.md](doc/test-plan.md) lists every manual scenario (failure modes, consent, Android and iOS background sync) with expected results; use it before releases.
 
 **Benchmarks**, when you touch `track()` or the store:
 

@@ -44,7 +44,7 @@ Add these entries to `ios/Runner/Info.plist`. They let bee_sync upload from back
 
 If any are missing, bee_sync logs a warning at startup. Delivery still works while the app runs and when it goes to the background; only the scheduled background tasks are skipped.
 
-> **Scene-based apps.** Apple requires background tasks to be registered before `application(_:didFinishLaunchingWithOptions:)` returns. The standard Flutter `AppDelegate` registers plugins in time. If yours registers plugins later, add this to `didFinishLaunchingWithOptions`:
+> **Scene-based apps.** Apple requires background tasks to be registered before `application(_:didFinishLaunchingWithOptions:)` returns. The standard Flutter `AppDelegate` registers plugins in time. If yours registers plugins later, bee_sync logs a "was not registered" warning at startup (it doesn't crash). To fix it, add this to `didFinishLaunchingWithOptions`:
 >
 > ```swift
 > import bee_sync

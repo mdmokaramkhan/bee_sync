@@ -110,14 +110,16 @@ final class StubProtocol: URLProtocol {
   enum Reply {
     case http(status: Int, headers: [String: String], body: Data)
     case networkError
+    /// A real redirect, as a server's 302 would produce.
+    case redirect(to: URL)
   }
 
   static var reply: ((URLRequest, Data) -> Reply)?
 
-  static func session() -> URLSession {
+  static func configuration() -> URLSessionConfiguration {
     let config = URLSessionConfiguration.ephemeral
     config.protocolClasses = [StubProtocol.self]
-    return URLSession(configuration: config)
+    return config
   }
 
   override class func canInit(with request: URLRequest) -> Bool { true }
@@ -139,6 +141,13 @@ final class StubProtocol: URLProtocol {
     switch Self.reply?(request, body) ?? .networkError {
     case .networkError:
       client?.urlProtocol(self, didFailWithError: URLError(.notConnectedToInternet))
+    case .redirect(let target):
+      let response = HTTPURLResponse(
+        url: request.url!, statusCode: 302, httpVersion: "HTTP/1.1",
+        headerFields: ["Location": target.absoluteString])!
+      client?.urlProtocol(self, wasRedirectedTo: URLRequest(url: target), redirectResponse: response)
+      client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
+      client?.urlProtocolDidFinishLoading(self)
     case .http(let status, let headers, let data):
       let response = HTTPURLResponse(
         url: request.url!, statusCode: status, httpVersion: "HTTP/1.1", headerFields: headers)!
@@ -239,7 +248,7 @@ class UploaderFixtureTests: XCTestCase {
     }
 
     let result = try NativeUploader(
-      store: db.store, sender: URLSessionSender(session: StubProtocol.session()), source: "test",
+      store: db.store, sender: URLSessionSender(configuration: StubProtocol.configuration()), source: "test",
       clock: { now }, seed: seed
     ).run(manual: (fixture["manual"] as? Bool) ?? false)
 
@@ -317,7 +326,7 @@ class NativeUploaderTests: XCTestCase {
     }
     let sentAt = (fixture["sent_at"] as! NSNumber).int64Value
     let result = try NativeUploader(
-      store: db.store, sender: URLSessionSender(session: StubProtocol.session()),
+      store: db.store, sender: URLSessionSender(configuration: StubProtocol.configuration()),
       source: "ios_bg_exit", clock: { sentAt }
     ).run()
     XCTAssertEqual(result.status, .drained)
@@ -341,7 +350,7 @@ class NativeUploaderTests: XCTestCase {
     XCTAssertEqual(crc32(Data("123456789".utf8)), 0xCBF4_3926)  // standard check value
 
     let input = Data(String(repeating: "bee_sync ", count: 200).utf8)
-    let gz = gzip(input)
+    let gz = try! XCTUnwrap(gzip(input))
     XCTAssertEqual(Array(gz.prefix(3)), [0x1f, 0x8b, 0x08])
     let trailer = gz.suffix(8)
     let crc = trailer.prefix(4).withUnsafeBytes { $0.loadUnaligned(as: UInt32.self) }
@@ -370,7 +379,7 @@ class NativeUploaderTests: XCTestCase {
       return .http(status: 200, headers: [:], body: Data())
     }
     _ = try NativeUploader(
-      store: db.store, sender: URLSessionSender(session: StubProtocol.session()), source: "test"
+      store: db.store, sender: URLSessionSender(configuration: StubProtocol.configuration()), source: "test"
     ).run()
     XCTAssertEqual(encoding, "gzip")
   }
@@ -380,10 +389,43 @@ class NativeUploaderTests: XCTestCase {
     try db.insert(id: "a", payload: Data("{}".utf8))
     try db.store.setMeta(MetaKeys.consent, "granted")
     let result = try NativeUploader(
-      store: db.store, sender: URLSessionSender(session: StubProtocol.session()), source: "test"
+      store: db.store, sender: URLSessionSender(configuration: StubProtocol.configuration()), source: "test"
     ).run()
     XCTAssertEqual(result.status, .skipped)
     XCTAssertEqual(result.error, "transport")
+  }
+
+  func testDoesNotFollowRedirects() throws {
+    let db = try TestDb()
+    try db.insert(id: "a", payload: Data("{}".utf8))
+    try db.store.setMeta(MetaKeys.consent, "granted")
+    try db.transport()
+    var requests: [String] = []
+    StubProtocol.reply = { request, _ in
+      requests.append("\(request.httpMethod ?? "?") \(request.url!.path)")
+      if request.url!.path == "/events" {
+        return .redirect(to: URL(string: "https://example.test/elsewhere")!)
+      }
+      return .http(status: 200, headers: [:], body: Data())  // would mark events sent
+    }
+    let result = try NativeUploader(
+      store: db.store, sender: URLSessionSender(configuration: StubProtocol.configuration()),
+      source: "test"
+    ).run()
+
+    XCTAssertEqual(requests, ["POST /events"])
+    XCTAssertEqual(result.status, .backingOff)
+    XCTAssertEqual(try db.store.countEvents(), 1)
+  }
+
+  func testRetryAfterIsCappedWithoutOverflow() {
+    let now: Int64 = 1_760_000_000_000
+    let day: Int64 = 86_400_000
+    XCTAssertEqual(NativeUploader.parseRetryAfter("86401", now: now), day)
+    XCTAssertEqual(NativeUploader.parseRetryAfter("99999999999999999999999", now: now), day)
+    XCTAssertEqual(NativeUploader.parseRetryAfter("9223372036854775807", now: now), day)
+    XCTAssertEqual(
+      NativeUploader.parseRetryAfter("Thu, 01 Jan 2099 00:00:00 GMT", now: now), day)
   }
 
   func testParsesRetryAfter() {
@@ -420,6 +462,23 @@ class BackgroundDeliveryTests: XCTestCase {
       ["bee_sync: add \"processing\" to UIBackgroundModes in Info.plist for iOS background delivery."])
   }
 
+  func testTaskRegistrationRefusalDoesNotCrash() {
+    // The test host registered both tasks at launch; registering again (and
+    // after launch) makes BGTaskScheduler raise, which must not crash.
+    let problem = BeeSyncRegisterTask(BackgroundDelivery.refreshId) { _ in }
+    XCTAssertNotNil(problem)
+    XCTAssertEqual(delivery.registeredIds, [BackgroundDelivery.refreshId, BackgroundDelivery.processingId])
+  }
+
+  func testDatabasePathIsStoredRelativeToHome() {
+    let stored = BackgroundDelivery.storable("/old/home/Library/bee_sync.db", home: "/old/home")
+    XCTAssertEqual(stored, "~/Library/bee_sync.db")
+    // After an app update the container moves; the path follows it.
+    XCTAssertEqual(BackgroundDelivery.resolve(stored, home: "/new/home"), "/new/home/Library/bee_sync.db")
+    XCTAssertEqual(BackgroundDelivery.storable("/tmp/x.db", home: "/old/home"), "/tmp/x.db")
+    XCTAssertEqual(BackgroundDelivery.resolve("/tmp/x.db", home: "/new/home"), "/tmp/x.db")
+  }
+
   func testRunOnceDeliversAndLogs() throws {
     let db = try TestDb()
     try db.insert(id: "a", payload: Data("{}".utf8))
@@ -428,12 +487,13 @@ class BackgroundDeliveryTests: XCTestCase {
     try db.transport()
     _ = delivery.configure(databasePath: db.path, enabled: true)
     StubProtocol.reply = { _, _ in .http(status: 200, headers: [:], body: Data()) }
-    delivery.sender = URLSessionSender(session: StubProtocol.session())
+    delivery.sender = URLSessionSender(configuration: StubProtocol.configuration())
 
-    let result = try XCTUnwrap(delivery.runOnce(source: "ios_bg_exit", shouldContinue: { true }))
+    guard case .ran(let run, let remaining) = delivery.runOnce(source: "ios_bg_exit", shouldContinue: { true })
+    else { return XCTFail("expected a run") }
 
-    XCTAssertEqual(result.0.status, .drained)
-    XCTAssertEqual(result.remaining, 0)
+    XCTAssertEqual(run.status, .drained)
+    XCTAssertEqual(remaining, 0)
     XCTAssertEqual(try db.logLines(), ["ios_bg_exit/info: drained: sent 2, dropped 0"])
   }
 
@@ -446,9 +506,10 @@ class BackgroundDeliveryTests: XCTestCase {
       requests += 1
       return .http(status: 200, headers: [:], body: Data())
     }
-    delivery.sender = URLSessionSender(session: StubProtocol.session())
+    delivery.sender = URLSessionSender(configuration: StubProtocol.configuration())
 
-    XCTAssertNil(delivery.runOnce(source: "ios_bgtask", shouldContinue: { true }))
+    guard case .waitingForMigration = delivery.runOnce(source: "ios_bgtask", shouldContinue: { true })
+    else { return XCTFail("expected to wait for migration") }
     XCTAssertEqual(requests, 0)
     XCTAssertTrue(try db.logLines().first?.contains("expected v2") ?? false)
   }

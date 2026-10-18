@@ -124,7 +124,7 @@ internal class NativeUploader(
             }
         }
 
-        val result = Run(transport, settings).drain(shouldContinue)
+        val result = Run(transport, settings, shouldContinue).drain()
         when (result.status) {
             RunStatus.DRAINED -> {
                 if (notBefore != 0L) store.setMeta(MetaKeys.FLUSH_NOT_BEFORE, "0")
@@ -154,11 +154,15 @@ internal class NativeUploader(
         class Permanent(val reason: String) : SendResult()
     }
 
-    private inner class Run(val transport: TransportConfig, val settings: DeliverySettings) {
+    private inner class Run(
+        val transport: TransportConfig,
+        val settings: DeliverySettings,
+        val keepGoing: () -> Boolean,
+    ) {
 
-        fun drain(shouldContinue: () -> Boolean): RunResult {
+        fun drain(): RunResult {
             var delivered = 0
-            while (shouldContinue()) {
+            while (keepGoing()) {
                 val now = clock()
                 val claimed = store.claim(owner, now, now + settings.leaseMs, settings.maxBatchSize)
                 if (claimed.isEmpty()) return RunResult(RunStatus.DRAINED, delivered, dropped)
@@ -232,6 +236,11 @@ internal class NativeUploader(
             if (first.stop != null) {
                 store.release(owner, events.drop(mid).map { it.id })
                 return first
+            }
+            // Splitting can take many requests; stop when the run should end (§3.2).
+            if (!keepGoing()) {
+                store.release(owner, events.drop(mid).map { it.id })
+                return Outcome(delivered = first.delivered, stop = RunStatus.SKIPPED)
             }
             return send(events.subList(mid, events.size)).plusDelivered(first.delivered)
         }
@@ -314,7 +323,7 @@ internal class NativeUploader(
     }
 
     private fun decode(e: StoredEvent): JSONObject? {
-        if (e.encrypted) return null // Encryption arrives in v0.3.
+        if (e.encrypted) return null // Encryption at rest is planned after 1.0.
         return try {
             JSONObject(e.payload.toString(Charsets.UTF_8))
         } catch (_: JSONException) {
@@ -348,14 +357,26 @@ internal class NativeUploader(
     }
 
     companion object {
-        /** `Retry-After`: delay-seconds or an HTTP-date. Null when absent or invalid. */
+        /** Longest `Retry-After` honoured (spec/uploader_contract.md §3.1). */
+        const val MAX_RETRY_AFTER_MS = 24L * 60 * 60 * 1000
+
+        /**
+         * `Retry-After`: delay-seconds or an HTTP-date, capped at
+         * [MAX_RETRY_AFTER_MS]. Null when absent or invalid.
+         */
         fun parseRetryAfter(value: String?, now: Long): Long? {
             if (value == null) return null
-            value.trim().toLongOrNull()?.let { return if (it < 0) null else it * 1000 }
+            val trimmed = value.trim()
+            if (trimmed.isNotEmpty() && trimmed.all { it in '0'..'9' }) {
+                // Too long for a Long, or over a day: cap (no overflow).
+                val seconds = trimmed.toLongOrNull() ?: return MAX_RETRY_AFTER_MS
+                return min(seconds, MAX_RETRY_AFTER_MS / 1000) * 1000
+            }
+            if (trimmed.toLongOrNull() != null) return null // negative
             return try {
                 val format = SimpleDateFormat("EEE, dd MMM yyyy HH:mm:ss zzz", Locale.US)
                 format.timeZone = TimeZone.getTimeZone("GMT")
-                max(0L, format.parse(value.trim())!!.time - now)
+                min(MAX_RETRY_AFTER_MS, max(0L, format.parse(trimmed)!!.time - now))
             } catch (_: ParseException) {
                 null
             }

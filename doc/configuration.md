@@ -14,10 +14,13 @@ await BeeSync.initialize(BeeSyncConfig(
   retention: const RetentionPolicy(),
   consent: const ConsentConfig(),
   background: const BackgroundConfig(),
-  maxEventBytes: 32 * 1024,
+  maxEventBytes: 32 * 1024,                // largest properties payload track() accepts
+  leaseDuration: const Duration(seconds: 60), // how long a batch being sent stays hidden from other uploaders
   logger: const BeeLogger.console(),
 ));
 ```
+
+`leaseDuration` must be longer than the transport timeout. If an uploader dies mid-send, its events become available again after this time, so they may be delivered twice. That's the at-least-once trade-off.
 
 ## Transport
 
@@ -164,7 +167,7 @@ Custom transports run only while the app runs; there is no background delivery f
 
 The default store is SQLite, through sqflite, in the app's support directory. To use another, implement `EventStore` and pass it to `BeeSync.initialize(config, store: …)`.
 
-The contract is defined in [`spec/uploader_contract.md`](../spec/uploader_contract.md), and the contract tests in `test/store/store_contract.dart` show the expected behaviour. A store without a `databasePath` gets no background delivery.
+The contract is defined in [`spec/uploader_contract.md`](../spec/uploader_contract.md), and the contract tests in `test/store/store_contract.dart` show the expected behaviour. Background delivery is off for a custom store unless it reports a `databasePath` and you also pass a `background:` scheduler to `initialize`.
 
 ## Testing
 

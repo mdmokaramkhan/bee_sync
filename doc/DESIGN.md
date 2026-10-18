@@ -41,12 +41,11 @@ Delivery guarantee: **at-least-once**. Every event carries a client-generated UU
 │  Dart (foreground)                         Native (always available)         │
 │  ┌─────────────────────┐                   ┌──────────────────────────────┐  │
 │  │ BeeSync (public API)│                   │ BeeSyncPlugin                │  │
-│  │  ├ ConsentGate      │  method channel   │  ├ KeyProvider (Keystore/    │  │
-│  │  ├ Enqueuer         │◄─────(pigeon)────►│  │   Keychain)               │  │
-│  │  ├ FlushController  │                   │  ├ BackgroundScheduler       │  │
-│  │  ├ RetentionPolicy  │                   │  │   (WorkManager / BGTask)  │  │
-│  │  ├ Uploader ────────┼──► EventTransport │  └ NativeUploader ──► HTTP   │  │
-│  │  └ Stats/Logger     │    (pluggable)    │        │                     │  │
+│  │  ├ track / consent  │  method channel   │  ├ BackgroundWork /          │  │
+│  │  ├ retention        │◄─────(pigeon)────►│  │   BackgroundDelivery      │  │
+│  │  ├ FlushController ─┼──► EventTransport │  │   (WorkManager / BGTask)  │  │
+│  │  │   (uploader)     │    (pluggable)    │  └ NativeUploader ──► HTTP   │  │
+│  │  └ stats / logger   │                   │        │                     │  │
 │  └─────────┬───────────┘                   └────────┼─────────────────────┘  │
 │            │ sqflite                                │ system SQLite API      │
 │            └──────────────►  bee_sync.db  ◄─────────┘                        │
@@ -65,66 +64,61 @@ Two independent uploaders (Dart and native) operate on **one SQLite file**. Corr
 | Storage | **SQLite via `sqflite`** in Dart; platform SQLite (`android.database.sqlite`, iOS `libsqlite3`) natively | Readable from both runtimes. Critically, sqflite uses the **system** SQLite library — the same one native code uses. Bundling a second SQLite copy (e.g. `sqlite3_flutter_libs`) in the same process is a known corruption hazard: POSIX advisory locks are per-process, and two library copies can silently release each other's locks. |
 | Journal mode | WAL + `busy_timeout=5000` | Concurrent reader/writer from both sides; short write transactions. |
 | Hive | Rejected | Not readable from native; effectively unmaintained. |
-| Encryption | Per-payload AES-256-GCM, data key wrapped by Keystore/Keychain | Native can decrypt for background upload; no SQLCipher build burden. Metadata (id, name, timestamps) stays plaintext for querying. |
+| Encryption | **Not implemented; planned after 1.0** (design in §9): per-payload AES-256-GCM, data key wrapped by Keystore/Keychain | Native can decrypt for background upload; no SQLCipher build burden. Metadata (id, name, timestamps) would stay plaintext for querying. |
+| Redirects | **Never followed**; a 3xx is retryable | HTTP clients re-send a redirected `POST` as a body-less `GET`; a 2xx for it would mark undelivered events as sent. |
 | Delivery semantics | At-least-once + UUIDv7 event ids | UUIDv7 is time-ordered → good index locality and natural sort for servers. |
 
 ---
 
 ## 3. Public API (Dart)
 
+The user-facing reference is [configuration.md](configuration.md); this is the shape of the API.
+
 ```dart
 final bee = await BeeSync.initialize(BeeSyncConfig(
   transport: HttpTransport(
     endpoint: Uri.parse('https://api.example.com/v1/events'),
-    headers: {'Authorization': 'Bearer $token'},
+    headers: {'Authorization': 'Bearer <ingestion-key>'}, // long-lived, write-only
     gzip: true,
   ),
-  batching: BatchingPolicy(
-    flushAt: 20,                         // flush when ≥ N normal events pending
-    flushInterval: Duration(seconds: 30),
-    maxBatchSize: 100,                   // events per request
-    maxBatchBytes: 512 * 1024,
-  ),
-  retry: RetryPolicy.exponential(
-    base: Duration(seconds: 2),
-    max: Duration(minutes: 10),
-    maxAttempts: 12,                     // then event is dropped (reason: maxAttempts)
-  ),
-  retention: RetentionPolicy(
-    maxEvents: 10000,
-    maxBytes: 10 * 1024 * 1024,
-    maxAge: Duration(days: 7),
-    overflow: OverflowPolicy.dropOldest, // or dropNewest
-  ),
-  consent: ConsentConfig(
-    initial: ConsentState.granted,       // granted | denied | unknown
-    whileUnknown: UnknownConsentBehavior.hold, // hold | drop
-  ),
-  background: BackgroundConfig(enabled: true),
-  encryption: EncryptionConfig.platformKey(), // or EncryptionConfig.none()
-  logger: BeeLogger.console(level: LogLevel.info),
+  batching: const BatchingPolicy(flushAt: 20, flushInterval: Duration(seconds: 30),
+                                 maxBatchSize: 100, maxBatchBytes: 512 * 1024),
+  retry: const RetryPolicy(base: Duration(seconds: 2), max: Duration(minutes: 10),
+                           maxAttempts: 12),
+  retention: const RetentionPolicy(maxEvents: 10000, maxBytes: 10 * 1024 * 1024,
+                                   maxAge: Duration(days: 7),
+                                   overflow: OverflowPolicy.dropOldest),
+  consent: const ConsentConfig(initial: ConsentState.granted,
+                               whileUnknown: UnknownConsentBehavior.hold),
+  background: const BackgroundConfig(enabled: true),
+  maxEventBytes: 32 * 1024,
+  leaseDuration: const Duration(seconds: 60),
+  logger: const BeeLogger.console(level: LogLevel.info),
 ));
 
-// Persist-then-return. Completes once the event is durable on disk.
+// Persist-then-return: completes once the event is durable on disk.
 final id = await bee.track('checkout_started', properties: {'cart_value': 42.5});
 await bee.track('purchase', properties: {'order_id': 'A1'}, priority: Priority.immediate);
 
-await bee.flush();                              // foreground flush now
-await bee.setHeaders({'Authorization': 'Bearer $newToken'}); // token rotation
+await bee.flush();                                   // send now
+await bee.setHeaders({'Authorization': 'Bearer <new-key>'});
 await bee.setConsent(ConsentState.denied, purge: true);
+await bee.resetBackoff();                            // retry now after an outage
+await bee.purgeQueue();                              // delete everything queued
 
-bee.stats.listen((QueueStats s) => ...);        // pending, inFlight, sent, dropped{reason}
-bee.events.listen((DeliveryEvent e) => ...);    // Delivered / Dropped / FlushFailed
-final bgLog = await bee.backgroundLog(limit: 50); // (v0.2) what native did while we were away
+bee.stats.listen((QueueStats s) => …);
+bee.events.listen((DeliveryEvent e) => …);           // Delivered / Dropped / FlushFailed
+final bgLog = await bee.backgroundLog(limit: 50);    // what native uploads did
 
-await bee.close();
+await bee.close();                                   // waits for in-flight track() calls
 ```
 
 Design notes:
-- `BeeSync.initialize` returns an instance; `BeeSync.instance` is a convenience singleton. All internals are constructor-injected for tests.
+- `BeeSync.initialize` returns an instance; `BeeSync.instance` is a convenience singleton. The store, platform signals, random source and background scheduler can be injected for tests.
 - `track()` is safe to call on `BeeSync.instance` before `initialize` completes: calls wait for the store to open.
 - Properties must be JSON-encodable; validated at `track()` time. Events larger than `maxEventBytes` (default 32 KB) are rejected with an error, never silently truncated.
 - `track()` returns the event id so apps can correlate.
+- Diagnostics for the inspector: `debugQueue()`, `debugActivity`, `debugSimulateOffline`.
 
 ### 3.1 Transport interface
 
@@ -135,9 +129,11 @@ abstract interface class EventTransport {
 }
 
 sealed class TransportResult {}
-class Success extends TransportResult { final Set<String> rejectedIds; }  // per-event rejects optional
-class RetryableFailure extends TransportResult { final Duration? retryAfter; }
-class PermanentFailure extends TransportResult { final String reason; }
+class Success extends TransportResult { final Set<String> rejectedIds; } // per-event rejects optional
+class RetryableFailure extends TransportResult { final String reason; final Duration? retryAfter; }
+class AuthFailure extends TransportResult { final String reason; }      // pause until new headers
+class PayloadTooLarge extends TransportResult {}                         // split the batch
+class PermanentFailure extends TransportResult { final String reason; } // bisect, drop refused events
 ```
 
 `HttpTransport` is the only transport the native uploader understands. It serializes its config (endpoint, headers, gzip, timeout) into the DB `meta` table on init and on `setHeaders()`, so the native side always has the latest values.
@@ -217,8 +213,9 @@ Properties:
 | 401, 403 | Auth | Release **without** consuming an attempt; background uploaders stop and wait for the foreground to call `setHeaders()` |
 | 413 | Too large | Split batch in half and retry; single event → drop (`tooLarge`) |
 | other 4xx | Permanent | Batch > 1 → **bisect** to isolate the poison event(s); single event → drop (`rejectedByServer`) |
+| 1xx, 3xx | Retryable | Redirects are **never followed** (a redirected `POST` can become a body-less `GET`) |
 
-Backoff: exponential with equal jitter, `cap = min(max, base × 2^(attempt-1))`, `delay = random(cap/2, cap)`. Equal rather than full jitter so a retry is never near-instant.
+Backoff: exponential with equal jitter, `cap = min(max, base × 2^(attempt-1))`, `delay = random(cap/2, cap)`. Equal rather than full jitter so a retry is never near-instant. `Retry-After` is capped at 24 hours, with overflow-safe parsing. Bisecting checks between halves whether the run should continue (background time can run out).
 
 An auth failure pauses automatic flushes in the foreground too; `setHeaders()` or a manual `flush()` resumes them.
 
@@ -332,8 +329,8 @@ The Dart and native serializers are checked against the same golden fixtures (`s
 
 ## 11. Observability
 
-- `stats` stream: `pending`, `inFlight`, `held`, `sent`, `dropped` (by reason: `overflow`, `expired`, `maxAttempts`, `rejectedByServer`, `tooLarge`, `noConsent`, `keyUnavailable`), `lastSuccessAt`, `lastError`.
-- `events` stream: `Delivered(ids)`, `Dropped(ids, reason)`, `FlushFailed(error, nextRetryAt)`.
+- `stats` stream and `getStats()`: `pending`, `inFlight`, `queuedBytes`, `sent`, `dropped` (by reason: `overflow`, `expired`, `maxAttempts`, `rejectedByServer`, `tooLarge`, `noConsent`, `unreadable`, `purged`), `consent`, `lastSuccessAt`, `lastError`, `backoffUntil`. Counters live in the `counters` table, so they include native deliveries.
+- `events` stream: `Delivered(ids)`, `Dropped(ids, reason)`, `FlushFailed(reason, retryAt)`.
 - `BeeLogger` interface with levels; never logs payload contents above `trace`.
 - `backgroundLog()` reads `bg_log`, so apps can see what native did while Dart wasn't running.
 - `BeeSyncInspector` (v0.3, `package:bee_sync/inspector.dart`) has three tabs. **Status** shows counts, backoff, consent and background state. **Queue** reads stored events via `EventStore.inspect`, which claims nothing; properties are shown only on tap. **Activity** shows the last 50 `RequestActivity`/`DropActivity` entries and the native `bg_log`. Actions: flush, simulate offline (this app's transport only), reset backoff, purge.
@@ -344,12 +341,15 @@ The Dart and native serializers are checked against the same golden fixtures (`s
 
 | Layer | How |
 |---|---|
-| Dart core | Unit tests with `FakeClock`, `FakeTransport` (scripted results), in-memory store, `FakeScheduler`. Covers batching, backoff, bisection, retention, consent, lease expiry. |
-| Store / claim protocol | Integration tests on real SQLite (`sqflite_common_ffi` on host). Concurrency tests: two uploaders racing on one DB. |
-| Cross-runtime conformance | `spec/` contains the claim SQL, schema, and JSON fixtures (input rows → expected request body / expected DB state after each response class). Run by Dart tests, JUnit (Robolectric), and XCTest. |
-| Native background | `WorkManagerTestInitHelper` on Android; `BGTaskScheduler` simulated via the debugger `_simulateLaunchForTaskWithIdentifier` on iOS (manual checklist). |
-| End-to-end | Example app + tiny local test server (Dart `shelf`) with switchable failure modes; integration_test drives offline → kill app → background → verify server received each id exactly once or more. |
-| Public helper | `BeeSyncTestHarness` exported for app developers: in-memory, network-free, with assertions like `expectTracked('purchase')`. |
+| Dart core | `test/core/`: a real `BeeSync` on fake time (`fake_async` + `package:clock`) with `InMemoryEventStore`, `FakeTransport` and `FakePlatformSignals`. Covers batching, backoff, bisection, retention, consent, auth block, diagnostics, store round trips per `track()`, and `close()` during `track()`. |
+| Stores | `test/store/store_contract.dart` runs one contract against `InMemoryEventStore` and `SqfliteEventStore` (real SQLite via `sqflite_common_ffi`), plus migration and WAL tests. |
+| Cross-runtime conformance | `spec/` holds the SQL, `uploader_contract.md` and JSON fixtures. Dart (`test/spec/`), Kotlin (Robolectric + MockWebServer) and Swift (XCTest + `URLProtocol` stub) run every fixture with 3 random seeds, and check their SQL against the spec text. |
+| Native background | Android: `FlushWorker` end to end with WorkManager's test helpers. iOS: run outcomes, logging, registration refusal, redirects, path storage. iOS BGTasks themselves need a device (`_simulateLaunchForTaskWithIdentifier`). |
+| Inspector | Widget tests for the three tabs and four actions (`test/inspector_test.dart`). |
+| Performance | `benchmark/`: `track()` throughput on host (FFI) and on device (`example/integration_test`); see `benchmark/README.md`. |
+| End-to-end | `tool/test_server.dart` (plain `dart:io`, switchable `ok`/`fail`/`auth`/`slow`) with the example app; verified on an Android emulator after `am kill` and on the iOS Simulator via the background-exit upload. |
+| CI | `.github/workflows/ci.yml`: Dart (format, analyze, test, publish dry run), Android tests, iOS tests. |
+| Public helper | `package:bee_sync/testing.dart`: `BeeSyncTestHarness` (in-memory, network-free; `trackedNames`, `flushAndCollect`), `FakeTransport(latency:)`, `FakePlatformSignals`, `FakeBackgroundScheduler`, `InMemoryEventStore`. |
 
 ---
 
@@ -358,25 +358,31 @@ The Dart and native serializers are checked against the same golden fixtures (`s
 ```
 bee_sync/
 ├── lib/
-│   ├── bee_sync.dart                # public exports
-│   ├── testing.dart                 # BeeSyncTestHarness
+│   ├── bee_sync.dart          # public API
+│   ├── inspector.dart         # BeeSyncInspector (separate import)
+│   ├── testing.dart           # test harness and fakes
 │   └── src/
-│       ├── api/        (bee_sync.dart, config.dart, models.dart)
-│       ├── core/       (enqueuer, flush_controller, retry, retention, consent)
-│       ├── store/      (event_store.dart, sqflite_store.dart, schema.dart, claim_sql.dart)
-│       ├── transport/  (event_transport.dart, http_transport.dart, wire_format.dart)
-│       ├── crypto/     (payload_cipher.dart)
-│       ├── platform/   (pigeon-generated channel + wrapper)
-│       └── diagnostics/(stats.dart, logger.dart)
-├── android/src/main/kotlin/dev/beesync/  (Plugin, FlushWorker, NativeUploader, Store, KeyProvider)
-├── ios/Classes/                          (Plugin, BackgroundTasks, NativeUploader, Store, KeyProvider)
+│       ├── api/               (bee_sync, config, models, errors)
+│       ├── core/              (flush_controller: the reference uploader, delivery_settings)
+│       ├── store/             (event_store, sqflite_store, memory_store, sql)
+│       ├── transport/         (event_transport, http_transport, wire_format)
+│       ├── platform/          (background, pigeon_background, signals, messages.g)
+│       ├── inspector/         (bee_sync_inspector)
+│       └── diagnostics/       (logger)
+├── android/src/main/kotlin/dev/beesync/bee_sync/
+│                              (BeeSyncPlugin, BeeSyncStore, NativeUploader, HttpSender,
+│                               FlushWorker, BackgroundWork, Sql, Messages.g)
+├── ios/Classes/               (BeeSyncPlugin, BackgroundDelivery, BeeSyncStore, NativeUploader,
+│                               HttpSender, Sql, BeeSyncTaskRegistration (ObjC), Messages.g)
 ├── pigeons/messages.dart
-├── spec/        (schema.sql, claim_protocol.sql, fixtures/)
-├── example/     (demo app + local test server)
+├── spec/                      (schema.sql, claim_protocol.sql, uploader_contract.md, fixtures/)
+├── benchmark/                 (track() throughput)
+├── tool/test_server.dart      (local endpoint)
+├── example/                   (demo app, RunnerTests, integration_test benchmark)
 └── test/
 ```
 
-Dependencies (kept minimal): `sqflite`, `path_provider`, `uuid`, `cryptography`, `http`, `connectivity_plus` (hint only). Dev: `pigeon`, `sqflite_common_ffi`, `fake_async`, `mocktail`.
+Dependencies: `sqflite`, `path_provider`, `path`, `uuid`, `http`, `clock`, `meta`, `connectivity_plus` (a hint only). Dev: `pigeon`, `sqflite_common_ffi`, `fake_async`. Android: WorkManager. iOS: `BackgroundTasks`, system `libsqlite3`.
 
 ---
 
@@ -397,13 +403,14 @@ Dependencies (kept minimal): `sqflite`, `path_provider`, `uuid`, `cryptography`,
 
 | Risk / question | Notes |
 |---|---|
-| Three implementations of the claim protocol drift | Mitigated by verbatim shared SQL + conformance fixtures run in CI on all three. |
+| Three implementations of the claim protocol drift | Mitigated by verbatim shared SQL and shared fixtures, run in CI on all three runtimes. |
 | Auth headers are stored in plaintext in `meta.transport_config` | Needed so the native uploader can authenticate. Encryption (after 1.0) should cover this row too; until then prefer ingestion-only keys over user tokens. |
-| Old system SQLite on Android (API 23 = SQLite 3.8.10) | All shared SQL avoids UPSERT, RETURNING and window functions; see the header of `spec/schema.sql`. |
-| Auth tokens expire while app is backgrounded | Native stops on 401 and waits for `setHeaders()`. **Open:** offer an optional static "ingestion key" mode (common for analytics endpoints) to sidestep this entirely? |
-| sqflite throughput for high-volume `track()` | Channel round-trip per insert (~0.1–0.5 ms). Mitigation: micro-batch inserts in a single transaction every ~10 ms. Benchmark in v0.1. |
-| Custom transports get no background delivery | Documented. **Open:** later allow a "background HTTP fallback" config alongside a custom foreground transport. |
+| Old system SQLite on Android (minSdk 24) | All shared SQL avoids UPSERT, RETURNING and window functions; see the header of `spec/schema.sql`. |
+| Auth tokens expire while app is backgrounded | Native stops on 401 and waits for `setHeaders()`. Docs recommend a long-lived ingestion key; a dedicated ingestion-key mode with request signing is planned for v0.4. |
+| sqflite throughput for high-volume `track()` | Measured in 0.3.0 (`benchmark/README.md`): one store call per `track()`, ~0.2 ms median on iOS, ~0.7 ms on an Android emulator. Micro-batching inserts is only worth it for sustained bursts. |
+| Custom transports get no background delivery | Documented. A `backgroundTransport` HTTP fallback is planned for v0.4. |
 | iOS force-quit kills all background work | Platform limitation; documented. Events deliver on next launch. |
 | Should `immediate` events bypass consent `hold`? | Proposed: **no** — consent applies uniformly. |
-| Competitive claims in the research report | Several are unverified or contradictory (e.g. Baseerh listed as both MIT and closed-source). Verify before using in README/marketing. |
-| Naming | Package `bee_sync`, native namespace `dev.beesync` — confirm the domain/namespace you want to own. |
+| iOS apps that register plugins after launch | BGTask registration then fails; since 0.3.1 it is caught (Objective-C shim) and reported as a startup warning instead of crashing. Such apps call `BeeSyncPlugin.registerBackgroundTasks()` in `didFinishLaunching`. |
+| iOS container path changes on app update | Since 0.3.1 the database path is stored relative to the home directory. |
+| Competitive claims in the research report | Several are unverified or contradictory. Verify before using in README/marketing. |

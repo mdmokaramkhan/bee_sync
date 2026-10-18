@@ -852,6 +852,27 @@ void main() {
     });
   });
 
+  test('close() waits for a track() already in progress', () {
+    fakeAsync((async) {
+      final store = _SlowInsertStore();
+      final rig = Rig(async, store: store)..start();
+      var tracked = false;
+      Object? trackError;
+      rig.bee
+          .track('a')
+          .then((_) => tracked = true, onError: (Object e) => trackError = e);
+      async.flushMicrotasks(); // track() is now waiting on the slow insert
+      final closing = rig.bee.close();
+      expect(() => rig.bee.track('late'), throwsStateError);
+
+      store.unblock.complete();
+      rig.wait(closing);
+      expect(trackError, isNull);
+      expect(tracked, isTrue);
+      expect(store.closedAfterInsert, isTrue);
+    });
+  });
+
   test('only one instance at a time', () {
     fakeAsync((async) {
       final rig = Rig(async)..start();
@@ -903,5 +924,26 @@ class _CountingStore extends InMemoryEventStore {
   }) {
     calls.add('evict');
     return super.evict(now: now, maxEvents: maxEvents, maxBytes: maxBytes);
+  }
+}
+
+/// An in-memory store whose insert waits until [unblock] completes.
+class _SlowInsertStore extends InMemoryEventStore {
+  final unblock = Completer<void>();
+  bool _inserted = false;
+  bool closedAfterInsert = false;
+
+  @override
+  Future<QueueTotals> insertAndCount(NewEvent event, {required int now}) async {
+    await unblock.future;
+    final totals = await super.insertAndCount(event, now: now);
+    _inserted = true;
+    return totals;
+  }
+
+  @override
+  Future<void> close() async {
+    closedAfterInsert = _inserted;
+    await super.close();
   }
 }

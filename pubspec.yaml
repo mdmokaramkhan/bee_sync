@@ -12,8 +12,8 @@ topics:
   - sync
 
 environment:
-  sdk: ^3.10.9
-  flutter: '>=3.3.0'
+  sdk: ^3.10.0
+  flutter: '>=3.38.0'
 
 dependencies:
   clock: ^1.1.2

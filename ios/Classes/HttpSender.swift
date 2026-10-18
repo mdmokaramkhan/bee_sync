@@ -10,16 +10,27 @@ struct HttpResponse {
 
 /// POSTs a request body synchronously; throws for network failures. Called
 /// from the uploader's own queue, never the main thread.
-protocol HttpSender {
+protocol HttpSender: AnyObject {
   func post(url: URL, headers: [String: String], body: Data, timeout: TimeInterval) throws
     -> HttpResponse
+
+  /// Aborts the request in progress, if any (background time ran out).
+  func cancel()
 }
 
 final class URLSessionSender: HttpSender {
   private let session: URLSession
+  private let lock = NSLock()
+  private var current: URLSessionTask?
 
-  init(session: URLSession = URLSession(configuration: .ephemeral)) {
-    self.session = session
+  init(configuration: URLSessionConfiguration = .ephemeral) {
+    session = URLSession(configuration: configuration, delegate: NoRedirects(), delegateQueue: nil)
+  }
+
+  func cancel() {
+    lock.lock()
+    current?.cancel()
+    lock.unlock()
   }
 
   func post(url: URL, headers: [String: String], body: Data, timeout: TimeInterval) throws
@@ -46,17 +57,39 @@ final class URLSessionSender: HttpSender {
       }
       done.signal()
     }
+    lock.lock()
+    current = task
+    lock.unlock()
     task.resume()
     done.wait()
+    lock.lock()
+    current = nil
+    lock.unlock()
     return try result.get()
   }
 }
 
+/// Refuses every redirect (spec/uploader_contract.md §4): URLSession would
+/// re-send a POST as a body-less GET on 301/302/303, and a 2xx for that GET
+/// would mark undelivered events as sent. The 3xx response is returned and
+/// treated as retryable.
+private final class NoRedirects: NSObject, URLSessionTaskDelegate {
+  func urlSession(
+    _ session: URLSession, task: URLSessionTask,
+    willPerformHTTPRedirection response: HTTPURLResponse, newRequest request: URLRequest,
+    completionHandler: @escaping (URLRequest?) -> Void
+  ) {
+    completionHandler(nil)
+  }
+}
+
 /// gzip (RFC 1952). Foundation's compression gives raw DEFLATE, so the header
-/// and CRC-32/ISIZE trailer are added here.
-func gzip(_ data: Data) -> Data {
+/// and CRC-32/ISIZE trailer are added here. Nil if compression failed; send
+/// the body uncompressed then.
+func gzip(_ data: Data) -> Data? {
+  guard let deflated = deflateRaw(data) else { return nil }
   var out = Data([0x1f, 0x8b, 0x08, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0xff])
-  out.append(deflateRaw(data))
+  out.append(deflated)
   var crc = crc32(data).littleEndian
   var size = UInt32(truncatingIfNeeded: data.count).littleEndian
   withUnsafeBytes(of: &crc) { out.append(contentsOf: $0) }
@@ -64,7 +97,7 @@ func gzip(_ data: Data) -> Data {
   return out
 }
 
-private func deflateRaw(_ data: Data) -> Data {
+private func deflateRaw(_ data: Data) -> Data? {
   if data.isEmpty { return Data([0x03, 0x00]) }  // empty final fixed-Huffman block
   let capacity = data.count + data.count / 10 + 64
   var buffer = [UInt8](repeating: 0, count: capacity)
@@ -73,7 +106,7 @@ private func deflateRaw(_ data: Data) -> Data {
       &buffer, capacity, src.bindMemory(to: UInt8.self).baseAddress!, data.count, nil,
       COMPRESSION_ZLIB)
   }
-  return Data(buffer.prefix(written))
+  return written == 0 ? nil : Data(buffer.prefix(written))
 }
 
 private let crcTable: [UInt32] = (0..<256).map { n -> UInt32 in

@@ -1,0 +1,47 @@
+{
+  "description": "Retry-After values above 24 hours are capped at 24 hours (and must not overflow).",
+  "now": 1760000000000,
+  "events": [
+    {
+      "id": "a",
+      "name": "evt",
+      "properties": {
+        "k": "a"
+      },
+      "priority": "normal",
+      "created_at": 1759999940000,
+      "attempts": 0,
+      "next_attempt_at": 0,
+      "lease_owner": null,
+      "lease_until": null
+    }
+  ],
+  "responses": [
+    {
+      "status": 503,
+      "headers": {
+        "retry-after": "99999999999999999999"
+      },
+      "body": ""
+    }
+  ],
+  "expect": {
+    "status": "backingOff",
+    "requests": [
+      [
+        "a"
+      ]
+    ],
+    "remaining": [
+      {
+        "id": "a",
+        "attempts": 1,
+        "next_attempt_at": 1760086400000
+      }
+    ],
+    "counters": {},
+    "meta": {
+      "flush_not_before": 1760086400000
+    }
+  }
+}

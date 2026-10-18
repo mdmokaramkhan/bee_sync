@@ -98,6 +98,7 @@ final class NativeUploader {
   private var random: SeededGenerator
   private let owner = "ios:\(UUID().uuidString.lowercased())"
   private var dropped = 0
+  private var keepGoing: () -> Bool = { true }
 
   init(
     store: BeeSyncStore,
@@ -116,7 +117,8 @@ final class NativeUploader {
   /// One run. Background runs are never `manual`; it exists so the shared
   /// fixtures run unchanged. `shouldContinue` is checked before each batch
   /// (the OS can end background time at any point).
-  func run(manual: Bool = false, shouldContinue: () -> Bool = { true }) throws -> RunResult {
+  func run(manual: Bool = false, shouldContinue: @escaping () -> Bool = { true }) throws -> RunResult {
+    keepGoing = shouldContinue
     guard try store.getMeta(MetaKeys.consent) == "granted" else {
       return RunResult(status: .skipped, error: "consent")
     }
@@ -134,7 +136,7 @@ final class NativeUploader {
       }
     }
 
-    let result = try drain(transport, settings, shouldContinue)
+    let result = try drain(transport, settings, keepGoing)
     switch result.status {
     case .drained:
       if notBefore != 0 { try store.setMeta(MetaKeys.flushNotBefore, "0") }
@@ -252,6 +254,11 @@ final class NativeUploader {
       try store.release(owner: owner, ids: events[mid...].map(\.id))
       return first
     }
+    // Splitting can take many requests; stop when the run should end (§3.2).
+    guard keepGoing() else {
+      try store.release(owner: owner, ids: events[mid...].map(\.id))
+      return Outcome(delivered: first.delivered, stop: .skipped)
+    }
     var second = try send(Array(events[mid...]), transport, settings)
     second.delivered += first.delivered
     return second
@@ -285,7 +292,8 @@ final class NativeUploader {
   /// §3.1: equal jitter in [cap/2, cap].
   private func backoffDelay(_ attempt: Int, _ settings: DeliverySettings) -> Int64 {
     let exp = Int64(min(max(attempt - 1, 0), 30))
-    let cap = min(settings.retryMaxMs, settings.retryBaseMs * (Int64(1) << exp))
+    let (product, overflow) = settings.retryBaseMs.multipliedReportingOverflow(by: Int64(1) << exp)
+    let cap = overflow ? settings.retryMaxMs : min(settings.retryMaxMs, product)
     let half = cap / 2
     return half + Int64.random(in: 0...(cap - half), using: &random)
   }
@@ -296,9 +304,8 @@ final class NativeUploader {
   }
 
   private func decode(_ e: StoredEvent) -> [String: Any]? {
-    if e.encrypted { return nil }  // Encryption arrives in v0.3.
-    return (try? JSONSerialization.jsonObject(with: e.payload, options: [.fragmentsAllowed]))
-      as? [String: Any]
+    if e.encrypted { return nil }  // Encryption at rest is planned after 1.0.
+    return (try? JSONSerialization.jsonObject(with: e.payload)) as? [String: Any]
   }
 
   private func post(_ events: [(StoredEvent, [String: Any])], _ transport: TransportConfig)
@@ -326,8 +333,8 @@ final class NativeUploader {
     headers["Content-Type"] = "application/json"
     headers["X-BeeSync-Batch-Id"] = batchId
     headers["X-BeeSync-Sdk"] = "bee_sync/\(beeSyncVersion) (ios; \(source))"
-    if transport.gzip {
-      data = gzip(data)
+    if transport.gzip, let compressed = gzip(data) {
+      data = compressed
       headers["Content-Encoding"] = "gzip"
     }
 
@@ -372,11 +379,20 @@ final class NativeUploader {
     return f
   }()
 
-  /// `Retry-After`: delay-seconds or an HTTP-date, in ms. Nil when absent or invalid.
+  /// Longest `Retry-After` honoured (spec/uploader_contract.md §3.1).
+  static let maxRetryAfterMs: Int64 = 24 * 60 * 60 * 1000
+
+  /// `Retry-After`: delay-seconds or an HTTP-date, in ms, capped at
+  /// `maxRetryAfterMs`. Nil when absent or invalid. Never overflows.
   static func parseRetryAfter(_ value: String?, now: Int64) -> Int64? {
-    guard let raw = value?.trimmingCharacters(in: .whitespaces) else { return nil }
-    if let seconds = Int64(raw) { return seconds < 0 ? nil : seconds * 1000 }
+    guard let raw = value?.trimmingCharacters(in: .whitespaces), !raw.isEmpty else { return nil }
+    if raw.allSatisfy({ $0.isASCII && $0.isNumber }) {
+      guard let seconds = Int64(raw) else { return maxRetryAfterMs }  // too long for Int64
+      return min(seconds, maxRetryAfterMs / 1000) * 1000
+    }
+    if Int64(raw) != nil { return nil }  // negative
     guard let date = httpDate.date(from: raw) else { return nil }
-    return max(0, Int64(date.timeIntervalSince1970 * 1000) - now)
+    let delay = date.timeIntervalSince1970 * 1000 - Double(now)
+    return delay <= 0 ? 0 : min(maxRetryAfterMs, Int64(min(delay, Double(maxRetryAfterMs))))
   }
 }

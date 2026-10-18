@@ -138,6 +138,52 @@ void main() {
     });
   });
 
+  test(
+    'does not follow redirects (a 303 would become a body-less GET)',
+    () async {
+      final server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
+      final methods = <String>[];
+      server.listen((req) async {
+        methods.add(req.method);
+        await req.drain<void>();
+        if (req.uri.path == '/events') {
+          req.response
+            ..statusCode = 303
+            ..headers.set('location', '/elsewhere');
+        } else {
+          req.response.statusCode = 200; // would wrongly mark events as sent
+        }
+        await req.response.close();
+      });
+      addTearDown(() => server.close(force: true));
+
+      final transport = HttpTransport(
+        endpoint: Uri.parse('http://127.0.0.1:${server.port}/events'),
+      );
+      addTearDown(transport.close);
+      final result = await transport.send(batchOf(['a']));
+
+      expect(result, isA<RetryableFailure>());
+      expect((result as RetryableFailure).reason, 'Unexpected HTTP 303');
+      expect(methods, ['POST']);
+    },
+  );
+
+  test('Retry-After is capped at 24 hours, even when absurdly large', () {
+    const day = Duration(hours: 24);
+    expect(HttpTransport.parseRetryAfter('86401'), day);
+    expect(HttpTransport.parseRetryAfter('99999999999999999999999'), day);
+    final now = DateTime.utc(2026, 10, 17, 12);
+    withClock(Clock.fixed(now), () {
+      expect(
+        HttpTransport.parseRetryAfter(
+          HttpDate.format(now.add(const Duration(days: 30))),
+        ),
+        day,
+      );
+    });
+  });
+
   test('parseRetryAfter handles seconds, HTTP dates and garbage', () {
     final now = DateTime.utc(2026, 10, 17, 12);
     withClock(Clock.fixed(now), () {

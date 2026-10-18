@@ -15,10 +15,11 @@ A patch release fixing issues found in a full code review: an iOS App Store priv
 
 ### Changed
 * SDK constraints: `sdk: ^3.10.0` (was `^3.10.9`) and `flutter: '>=3.38.0'` (was `'>=3.3.0'`, which was meaningless with the Dart constraint).
+* `connectivity_plus` now accepts `>=6.0.0 <8.0.0` (was `^7.3.2`). connectivity_plus 7.3 uses iOS 26 SDK APIs, so apps building with an older Xcode couldn't compile; they can now resolve a 6.x release. Tested against 6.0.4.
 * `spec/uploader_contract.md`: never follow redirects, cap `Retry-After` at 24 hours, and check "should continue" while splitting. There are two new shared test cases.
 
 ### Added
-* CI (`.github/workflows/ci.yml`): Dart format, analysis, tests and publish dry run; Android tests; iOS tests.
+* CI (`.github/workflows/ci.yml`): Dart format, analysis, tests and publish dry run; Android tests; iOS tests, using the newest stable Xcode on the runner.
 
 ### Docs
 * `doc/DESIGN.md` refreshed from the code (API, transport results, observability, testing, layout, risks).

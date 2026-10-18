@@ -17,7 +17,9 @@ environment:
 
 dependencies:
   clock: ^1.1.2
-  connectivity_plus: ^7.3.2
+  # 6.0 is the first version with the List<ConnectivityResult> API used here;
+  # allowing it lets apps on older Xcode versions pick a release that builds.
+  connectivity_plus: '>=6.0.0 <8.0.0'
   flutter:
     sdk: flutter
   http: ^1.6.0

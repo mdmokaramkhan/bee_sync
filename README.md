@@ -169,6 +169,7 @@ Background delivery requires `HttpTransport`. Custom transports deliver only whi
 | [Background delivery](doc/background-delivery.md) | How the native upload works, its limits, testing and troubleshooting |
 | [Server guide](doc/server-guide.md) | Request format, responses, deduplication, example server |
 | [Configuration](doc/configuration.md) | Every option, consent, priorities, custom transports and stores |
+| [Test plan](doc/test-plan.md) | Hands-on scenarios for foreground, failures, consent and background sync |
 | [Design](doc/DESIGN.md) | Architecture and design decisions |
 | [Changelog](CHANGELOG.md) | Release history |
 

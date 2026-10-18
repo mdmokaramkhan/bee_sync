@@ -7,6 +7,7 @@ Thanks for helping! This guide covers setting up the project, running the tests,
 ## Ways to help
 
 - **Report a bug:** open an issue with the bug template. Include your Flutter version, platform, and the inspector's Status and Activity tabs if you can.
+- **Report a security issue:** don't open a public issue; see [SECURITY.md](SECURITY.md).
 - **Suggest a feature:** open an issue first so we can agree on the approach before you write code.
 - **Improve docs:** typo fixes and clearer explanations are always welcome, no issue needed.
 - **Send code:** see below.

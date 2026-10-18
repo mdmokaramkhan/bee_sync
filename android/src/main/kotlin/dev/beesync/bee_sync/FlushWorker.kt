@@ -47,7 +47,10 @@ internal class FlushWorker(context: Context, params: WorkerParameters) : Worker(
             }
 
             val result = try {
-                NativeUploader(s, sender, SOURCE).run(shouldContinue = { !isStopped })
+                // Every job requires a network connection, so a backoff caused
+                // by network failures is over (§2).
+                NativeUploader(s, sender, SOURCE)
+                    .run(networkAvailable = true, shouldContinue = { !isStopped })
             } catch (e: Exception) {
                 Log.w(TAG, "Background upload failed", e)
                 s.log(System.currentTimeMillis(), SOURCE, "error", "Upload failed: ${e.javaClass.simpleName}")

@@ -1,0 +1,39 @@
+{
+  "description": "network_available does not end a backoff the server asked for (network_failures is 0).",
+  "now": 1760000000000,
+  "network_available": true,
+  "meta": {
+    "flush_not_before": "1760000120000"
+  },
+  "events": [
+    {
+      "id": "a",
+      "name": "evt",
+      "properties": {
+        "k": "a"
+      },
+      "priority": "normal",
+      "created_at": 1759999940000,
+      "attempts": 1,
+      "next_attempt_at": 1760000120000,
+      "lease_owner": null,
+      "lease_until": null
+    }
+  ],
+  "responses": [],
+  "expect": {
+    "status": "skipped",
+    "requests": [],
+    "remaining": [
+      {
+        "id": "a",
+        "attempts": 1,
+        "next_attempt_at": 1760000120000
+      }
+    ],
+    "counters": {},
+    "meta": {
+      "flush_not_before": 1760000120000
+    }
+  }
+}

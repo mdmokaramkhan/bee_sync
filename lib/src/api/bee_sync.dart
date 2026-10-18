@@ -128,6 +128,7 @@ class BeeSync implements FlushListener {
   Timer? _statsTimer;
   Future<FlushResult>? _runningFlush;
   bool _flushAgain = false;
+  bool _flushAgainNetworkAvailable = false;
   bool _closed = false;
   int _activeTracks = 0;
   Completer<void>? _tracksIdle;
@@ -180,6 +181,7 @@ class BeeSync implements FlushListener {
 
     _subscriptions
       ..add(_signals.appBackgrounded.listen((_) => _onBackgrounded()))
+      ..add(_signals.appForegrounded.listen((_) => _onForegrounded()))
       ..add(_signals.connectivityRestored.listen((_) => _onConnectivity()));
     _intervalTimer = Timer.periodic(
       config.batching.flushInterval,
@@ -191,7 +193,8 @@ class BeeSync implements FlushListener {
       'bee_sync started (consent: ${_consent.name}, '
       'background: $_backgroundEnabled)',
     );
-    _requestFlush();
+    // A fresh start may follow an outage that ended while the app was closed.
+    _requestFlush(networkAvailable: true);
     _scheduleStats();
   }
 
@@ -384,36 +387,50 @@ class BeeSync implements FlushListener {
   /// Sends everything that is ready now.
   ///
   /// Unlike automatic flushes, this ignores the global backoff and a previous
-  /// auth failure. Per-event backoff still applies, and nothing is sent unless
-  /// consent is granted.
+  /// auth failure, and retries events waiting because of network failures
+  /// right away. Events the server asked to wait (5xx, `Retry-After`) keep
+  /// waiting, and nothing is sent unless consent is granted.
   Future<FlushResult> flush() async {
     if (!_ready.isCompleted) await _ready.future;
     _checkOpen();
-    return _flush(manual: true);
+    return _flush(manual: true, networkAvailable: true);
   }
 
-  void _requestFlush({bool immediateOnly = false}) {
+  void _requestFlush({
+    bool immediateOnly = false,
+    bool networkAvailable = false,
+  }) {
     if (_closed) return;
-    unawaited(_flush(immediateOnly: immediateOnly));
+    unawaited(
+      _flush(immediateOnly: immediateOnly, networkAvailable: networkAvailable),
+    );
   }
 
   Future<FlushResult> _flush({
     bool manual = false,
     bool immediateOnly = false,
+    bool networkAvailable = false,
   }) {
     final running = _runningFlush;
     if (running != null) {
       // Coalesce: one more pass after the current one picks up new events.
       _flushAgain = true;
+      _flushAgainNetworkAvailable |= networkAvailable;
       return running;
     }
-    final future = _doFlush(manual: manual, immediateOnly: immediateOnly);
+    final future = _doFlush(
+      manual: manual,
+      immediateOnly: immediateOnly,
+      networkAvailable: networkAvailable,
+    );
     _runningFlush = future;
     return future.whenComplete(() {
       _runningFlush = null;
       if (_flushAgain && !_closed) {
+        final again = _flushAgainNetworkAvailable;
         _flushAgain = false;
-        _requestFlush();
+        _flushAgainNetworkAvailable = false;
+        _requestFlush(networkAvailable: again);
       }
     });
   }
@@ -421,11 +438,13 @@ class BeeSync implements FlushListener {
   Future<FlushResult> _doFlush({
     required bool manual,
     required bool immediateOnly,
+    required bool networkAvailable,
   }) async {
     try {
       final result = await _flusher.run(
         manual: manual,
         immediateOnly: immediateOnly,
+        networkAvailable: networkAvailable,
         shouldContinue: () => !_closed && _consent == ConsentState.granted,
       );
       if (result.delivered > 0) _lastSuccessAt = clock.now();
@@ -461,6 +480,12 @@ class BeeSync implements FlushListener {
     await _syncBackgroundSchedule(cancelWhenEmpty: false);
     await _flush();
     await _syncBackgroundSchedule(cancelWhenEmpty: true);
+  }
+
+  void _onForegrounded() {
+    // The network may have come back while the app was in the background,
+    // unnoticed: end any backoff the outage caused (§3.3).
+    _requestFlush(networkAvailable: true);
   }
 
   /// Schedules native background work while events remain; with

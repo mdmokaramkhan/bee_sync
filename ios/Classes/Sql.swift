@@ -90,6 +90,8 @@ enum Sql {
     WHERE lease_owner = ? AND id IN ({ids})
     """
 
+  static let resetBackoff = "UPDATE events SET next_attempt_at = 0 WHERE next_attempt_at > 0"
+
   static let getMeta = "SELECT value FROM meta WHERE key = ?"
 
   static let setMeta = "INSERT OR REPLACE INTO meta (key, value) VALUES (?, ?)"
@@ -131,6 +133,7 @@ enum Sql {
     "release_retry": releaseRetry,
     "release_backoff": releaseBackoff,
     "release": release,
+    "reset_backoff": resetBackoff,
     "get_meta": getMeta,
     "set_meta": setMeta,
     "count_events": countEvents,

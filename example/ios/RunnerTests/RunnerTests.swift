@@ -250,7 +250,9 @@ class UploaderFixtureTests: XCTestCase {
     let result = try NativeUploader(
       store: db.store, sender: URLSessionSender(configuration: StubProtocol.configuration()), source: "test",
       clock: { now }, seed: seed
-    ).run(manual: (fixture["manual"] as? Bool) ?? false)
+    ).run(
+      manual: (fixture["manual"] as? Bool) ?? false,
+      networkAvailable: (fixture["network_available"] as? Bool) ?? false)
 
     let expect = fixture["expect"] as! [String: Any]
     XCTAssertNil(unexpected, "\(label): unexpected request")

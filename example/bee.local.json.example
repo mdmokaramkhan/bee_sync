@@ -1,0 +1,6 @@
+{
+  "BEE_ENDPOINT": "http://10.0.2.2:8080/events",
+  "BEE_FLUSH_AT": "5",
+  "BEE_FLUSH_INTERVAL": "15",
+  "BEE_MAX_ATTEMPTS": "12"
+}

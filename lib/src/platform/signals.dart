@@ -8,6 +8,9 @@ abstract interface class PlatformSignals {
   /// The app moved to the background (lifecycle `paused` / `hidden`).
   Stream<void> get appBackgrounded;
 
+  /// The app became visible again after being in the background.
+  Stream<void> get appForegrounded;
+
   /// Connectivity came back after being offline. A hint only: the request is
   /// the real test of reachability.
   Stream<void> get connectivityRestored;
@@ -20,7 +23,10 @@ class FlutterPlatformSignals implements PlatformSignals {
   FlutterPlatformSignals({Connectivity? connectivity})
     : _connectivity = connectivity ?? Connectivity() {
     WidgetsFlutterBinding.ensureInitialized();
-    _lifecycle = AppLifecycleListener(onHide: () => _backgrounded.add(null));
+    _lifecycle = AppLifecycleListener(
+      onHide: () => _backgrounded.add(null),
+      onShow: () => _foregrounded.add(null),
+    );
     _connectivitySub = _connectivity.onConnectivityChanged.listen((results) {
       final online = results.any((r) => r != ConnectivityResult.none);
       if (online && _wasOffline) _restored.add(null);
@@ -32,11 +38,15 @@ class FlutterPlatformSignals implements PlatformSignals {
   late final AppLifecycleListener _lifecycle;
   late final StreamSubscription<List<ConnectivityResult>> _connectivitySub;
   final _backgrounded = StreamController<void>.broadcast();
+  final _foregrounded = StreamController<void>.broadcast();
   final _restored = StreamController<void>.broadcast();
   bool _wasOffline = false;
 
   @override
   Stream<void> get appBackgrounded => _backgrounded.stream;
+
+  @override
+  Stream<void> get appForegrounded => _foregrounded.stream;
 
   @override
   Stream<void> get connectivityRestored => _restored.stream;
@@ -46,6 +56,7 @@ class FlutterPlatformSignals implements PlatformSignals {
     _lifecycle.dispose();
     _connectivitySub.cancel();
     _backgrounded.close();
+    _foregrounded.close();
     _restored.close();
   }
 }

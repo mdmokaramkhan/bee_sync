@@ -43,6 +43,8 @@ check PRAGMA user_version == 2         # else: log to bg_log if possible, stop
 read meta                              # including network_failures (§3.3)
 if consent_state != "granted": stop(skipped)
 if native and transport_config absent: stop(skipped)
+if network_available and network_failures > 0:    # the outage is over (§3.3)
+  reset_backoff; set_meta(flush_not_before, "0"); flush_not_before = 0
 if auth_blocked == "1" and not manual: stop(skipped)
 if now < flush_not_before and not manual: stop(skipped)
 
@@ -64,10 +66,18 @@ on stop(authBlocked): set_meta(auth_blocked, "1")
 
 Native runs are never `manual`. They also stop early when the OS budget expires. Leased rows are then left alone, and their leases expire.
 
+`network_available` is true when the run was started because the network is probably working again:
+
+| Runtime | Runs with `network_available` |
+|---|---|
+| Dart | App start, app returning to the foreground, manual flush. (Connectivity coming back already resets every backoff.) |
+| Android | Every `FlushWorker` run: all its jobs require a network connection. |
+| iOS | `BGAppRefreshTask` and `BGProcessingTask` runs. Not the upload when the app is backgrounded, which usually follows a failure.
+
 ## 3. Sending a batch
 
 1. Decode each payload: UTF-8 JSON object. Rows that fail to decode are deleted with `delete_leased` and counted as `dropped.unreadable`. They are not sent.
-2. POST the body (§4). If an HTTP response arrived (any status) and `network_failures` is not `0`, `set_meta(network_failures, "0")`. Classify the result:
+2. POST the body (§4). If an HTTP response arrived (any status) and `network_failures` is not `0`, the outage is over: `set_meta(network_failures, "0")` and `reset_backoff`, so rows deferred by it can go in this run. Classify the result:
 
 | Result | Action |
 |---|---|
@@ -112,6 +122,8 @@ release_backoff(retry_at, owner, ids)
 
 Network failures alone never drop an event: only HTTP responses count toward `max_attempts`. `RetentionPolicy` (age, queue size) still applies.
 
+The network backoff ends as soon as the network is known to work again: any HTTP response (step 2 of §3), or a run with `network_available` (§2). Without this, rows deferred during the outage would keep waiting (up to `retry_max_ms`) after the network is back, and a manual flush would skip them. A backoff the server asked for (5xx, `Retry-After`) leaves `network_failures` at `0`, so it is kept.
+
 ## 4. Request
 
 **Never follow redirects.** Many HTTP clients follow a 301/302/303 for a `POST` by re-sending it as a `GET` without a body. If that `GET` returns 2xx, the events would be deleted as delivered although the server never received them. Disable automatic redirects and treat any 3xx as retryable (§3).
@@ -140,6 +152,7 @@ After each run, `insert_bg_log` one `info` summary line, for example `drained: s
   "delivery_config": { … },            // optional, overrides defaults
   "meta": {"consent_state": "granted"},// optional; consent defaults to granted
   "manual": false,                     // optional
+  "network_available": false,          // optional (§2)
   "events": [{
     "id": "a", "name": "e", "properties": {}, "priority": "normal",
     "created_at": 0, "attempts": 0, "next_attempt_at": 0,

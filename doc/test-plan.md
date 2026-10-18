@@ -52,20 +52,22 @@ curl localhost:8080/reset
 | iOS Simulator | `http://localhost:8080/events` |
 | Physical phone, same Wi-Fi as your Mac | `http://<your-mac>.local:8080/events` (find the name with `scutil --get LocalHostName`) |
 
+For the scenarios in sections A–H, turn off the app's own events so that only your taps create events and the counts below hold:
+
 ```bash
-cd example && flutter run --dart-define=BEE_ENDPOINT=http://10.0.2.2:8080/events
+cd example && flutter run --dart-define=BEE_ENDPOINT=http://10.0.2.2:8080/events --dart-define=BEE_AUTO_EVENTS=false
 ```
 
-Add `--dart-define=BEE_DEMO_EVENTS=3` to track 3 events at startup without tapping anything; several background scenarios use it.
+Add `--dart-define=BEE_DEMO_EVENTS=3` to track 3 events at startup without tapping anything; several background scenarios use it. To keep your settings out of the repository, put them in `example/bee.local.json` (gitignored; copy `bee.local.json.example`) and run with `--dart-define-from-file=bee.local.json`.
 
-The committed example sends a batch at **5 events** or every **15 seconds**. Its buttons:
-- **Track normal**
-- **Track immediate**: sent right away
-- **Flush**
-- **Tracking consent** switch: turning it off purges the queue
-- 🐞 in the top right: opens the inspector
+The example sends a batch at **5 events** or every **15 seconds** (`BEE_FLUSH_AT`, `BEE_FLUSH_INTERVAL`). The steps below use the **Delivery** tab:
+- **Track 1** / **Track 10**: normal `test_event`s;
+- **Track immediate**: sent right away;
+- **Flush now**, **Reset backoff**, **Simulate offline**;
+- **Tracking consent** switch: turning it off purges the queue;
+- the status card (pending, sent, dropped, next retry) and a log of everything tracked and delivered.
 
-If you changed `example/lib/main.dart` locally, adjust the numbers in the steps.
+🐞 in the top right opens the inspector. With other settings, adjust the numbers in the steps.
 
 **3. Start each scenario clean:**
 - `curl localhost:8080/reset` on the server;
@@ -85,7 +87,7 @@ track() ─► SQLite (events table) ─► FlushController ─► POST /events 
 - 5 events are pending (`flushAt`);
 - every 15 s (`flushInterval`);
 - about 50 ms after an immediate event;
-- when the app goes to the background;
+- when the app goes to the background, or comes back to the foreground;
 - when connectivity returns;
 - on `flush()`.
 
@@ -150,35 +152,35 @@ expiration: the request is cancelled, the task completes, leases release the row
 
 ### A1 · Events reach the server in a batch
 **Where:** both · **Server:** `ok`
-1. Tap **Track normal** 5 times.
+1. Tap **Track 1** 5 times.
 
 **Expect:** one request: `200 … from=dart events=5 stored=5 duplicates=0 attempts=1`. Inspector → Status: Pending 0, Sent +5.
 
 ### A2 · Immediate events skip the batch
 **Where:** both · **Server:** `ok`
-1. Tap **Track normal** twice (below the batch size).
+1. Tap **Track 1** twice (below the batch size).
 2. Tap **Track immediate**.
 
 **Expect:**
-- Within about a second, a request with `events=1 names=purchase`.
+- Within about a second, a request with `events=1 names=test_event`.
 - The two normal events stay pending until the batch fills or 15 s pass.
 
 ### A3 · The interval sends a partial batch
 **Where:** both · **Server:** `ok`
-1. Tap **Track normal** once and wait.
+1. Tap **Track 1** once and wait.
 
 **Expect:** sent within about 15 s, `events=1`.
 
 ### A4 · Flush sends immediately
 **Where:** both · **Server:** `ok`
-1. Tap **Track normal** twice.
-2. Tap **Flush** at once.
+1. Tap **Track 1** twice.
+2. Tap **Flush now** at once.
 
-**Expect:** one request with both events; the app log shows `Flush: drained, 2 delivered`.
+**Expect:** one request with both events; the Delivery log shows `Flush: FlushResult(drained, delivered: 2)`.
 
 ### A5 · Going to the background sends what's pending
 **Where:** both · **Server:** `ok`
-1. Tap **Track normal** twice.
+1. Tap **Track 1** twice.
 2. Send the app to the background (see [Quick reference](#quick-reference)).
 
 **Expect:**
@@ -210,13 +212,13 @@ expiration: the request is cancelled, the task completes, leases release the row
 
 ### B3 · Flaky server
 **Where:** both · **Server:** `flaky`
-1. Tap **Track normal** 10 times, then wait about a minute.
+1. Tap **Track 1** 10 times, then wait about a minute.
 
 **Expect:** `/stats` shows `unique_events_stored: 10`, `duplicates: 0`. Some requests in the log show 503.
 
 ### B4 · Every batch refused (400)
 **Where:** both · **Server:** `reject`
-1. Tap **Track normal** 4 times, then **Flush**.
+1. Tap **Track 1** 4 times, then **Flush now**.
 
 **Expect:**
 - bee_sync splits the batch until it reaches single events: 7 requests (4, 2, 1, 1, 2, 1, 1), all 400.
@@ -225,13 +227,13 @@ expiration: the request is cancelled, the task completes, leases release the row
 
 ### B5 · Partly refused batch
 **Where:** both · **Server:** `partial`
-1. Tap **Track normal** 5 times.
+1. Tap **Track 1** 5 times.
 
 **Expect:** one request; `stored=4`. Status: Sent +4, Dropped `rejectedByServer` +1.
 
 ### B6 · Batch too large (413)
 **Where:** both · **Server:** `toolarge`
-1. Tap **Track normal** 5 times.
+1. Tap **Track 1** 5 times.
 
 **Expect:**
 - bee_sync splits until it reaches single events: 9 requests (5, 2, 1, 1, 3, 1, 2, 1, 1). Only the single-event ones get 200.
@@ -251,7 +253,7 @@ expiration: the request is cancelled, the task completes, leases release the row
 
 ### B8 · Slow server
 **Where:** both · **Server:** `slow`
-1. Tap **Track normal** 5 times, then 5 more while the first request is in progress.
+1. Tap **Track 1** 5 times, then 5 more while the first request is in progress.
 
 **Expect:**
 - The first request takes about 10 s; Inspector → Status shows *In flight 5* meanwhile.
@@ -266,7 +268,7 @@ expiration: the request is cancelled, the task completes, leases release the row
 
 ### B11 · Being offline never drops events
 **Where:** both · **Server:** `ok`
-1. To make a drop easy to see, set `retry: const RetryPolicy(maxAttempts: 3)` in `example/lib/main.dart`.
+1. To make a drop easy to see, run with `--dart-define=BEE_MAX_ATTEMPTS=3`.
 2. Turn airplane mode on and tap **Track immediate**.
 3. Leave the app open for 2 minutes. Inspector → Activity shows several *Network error* failures.
 
@@ -275,11 +277,24 @@ expiration: the request is cancelled, the task completes, leases release the row
 
 **Expect:** delivered with `attempts=1`.
 
+### B12 · Events wait no longer once the network is back
+**Where:** both · **Server:** `ok`
+1. Turn airplane mode on and tap **Track 1** 4 times.
+2. Leave the app open for about 3 minutes. Each failure doubles the wait; the status card's *Next retry* passes a minute.
+3. Then either:
+   - **a.** turn airplane mode off and tap **Flush now**;
+   - **b.** background the app, kill it (`am kill`, or swipe it away on a stock Android phone), then turn airplane mode off.
+
+**Expect:**
+- **a:** one request with all 4 events, at once.
+- **b:** `from=android_worker events=4` within seconds of reconnecting, not after the wait. On iOS, the events go out when a background task runs or the app is next opened.
+- `attempts=1`, `duplicates=0`.
+
 ### B10 · At-least-once: duplicates only after a lost response
 **Where:** Android emulator · **Server:** `slow`
 
 This is the one case where a duplicate is *expected*. Your server must deduplicate on `id`.
-1. Tap **Track normal** 5 times. While the request is in progress (10 s), background the app and run `adb shell am kill …`.
+1. Tap **Track 1** 5 times. While the request is in progress (10 s), background the app and run `adb shell am kill …`.
 2. Switch the server to `ok`.
 
 **Expect:**
@@ -297,7 +312,7 @@ This is the one case where a duplicate is *expected*. Your server must deduplica
 2. Switch the server to `ok` and wait 30 s.
 
    **Expect:** nothing is sent: uploads stay paused.
-3. Tap **Flush**.
+3. Tap **Flush now**.
 
 **Expect:** delivered. After this, automatic uploads resume.
 
@@ -310,13 +325,13 @@ This is the one case where a duplicate is *expected*. Your server must deduplica
 **Expect:**
 - Nothing is sent.
 - On reopening: Inspector → Activity → Background shows `skipped: auth`, if a job ran.
-- **Flush** delivers.
+- **Flush now** delivers.
 
 ## D. Consent
 
 ### D1 · Denying stops tracking and wipes the queue
 **Where:** both · **Server:** `fail` (so events stay queued)
-1. Tap **Track normal** 3 times.
+1. Tap **Track 1** 3 times.
 2. Turn **Tracking consent** off.
 
 **Expect:**
@@ -337,7 +352,7 @@ This is the one case where a duplicate is *expected*. Your server must deduplica
 
 ### E1 · Queued events survive the app being killed
 **Where:** both · **Server:** `fail`
-1. Tap **Track normal** 3 times.
+1. Tap **Track 1** 3 times.
 2. Kill the app: swipe it away on iOS, or `am force-stop` on Android.
 3. Reopen. Inspector shows Pending 3.
 4. Switch the server to `ok`.
@@ -346,7 +361,7 @@ This is the one case where a duplicate is *expected*. Your server must deduplica
 
 ### E2 · Android force-stop disables background delivery (OS rule)
 **Where:** Android · **Server:** `fail`
-1. Tap **Track normal** 3 times and background the app.
+1. Tap **Track 1** 3 times and background the app.
 2. Run `am force-stop`, then switch the server to `ok`.
 3. Wait 5 minutes.
 
@@ -505,6 +520,19 @@ Open it with the 🐞 button.
 | H4 | Simulate offline off → Reset backoff → Flush now | Delivered |
 | H5 | Purge queue | Asks first; Cancel keeps events; Purge drops them (`purged`) |
 
+## I. App events
+
+Run with the app's own events on (the default, without `BEE_AUTO_EVENTS=false`). Every event carries `session_id` and `seq` (1, 2, 3, … within a session); the Delivery log lists each one as it is tracked.
+
+| # | Do | Expect on the server |
+|---|---|---|
+| I1 | Cold start | `session_start` (`reason: cold_start`), then `screen_view` (`screen: shop`) |
+| I2 | Scroll the Shop list; open a product; go back; switch tabs | One `widget_viewed` per card as it scrolls into view (once per visit to the tab); `product_tapped`; `screen_view` for `product_detail`, then back to `shop`, then each tab |
+| I3 | Add to cart, then Checkout on the Cart tab | `add_to_cart`, then `purchase` sent at once (immediate) |
+| I4 | Background the app, wait, reopen | `app_background` (with `foreground_ms`) and `app_foreground` (with `background_ms`). After 30 min away, a new `session_start` (`reason: timeout`) with a new `session_id` |
+
+For every `session_id`, the server should have every `seq` from 1 up, with no gaps. A gap means a lost event.
+
 ## Automated coverage
 
 These run in CI on every pull request. Run them locally as in [CONTRIBUTING.md](../CONTRIBUTING.md#running-tests).
@@ -512,7 +540,7 @@ These run in CI on every pull request. Run them locally as in [CONTRIBUTING.md](
 | Area | Covered by |
 |---|---|
 | Batching, intervals, immediate priority, background trigger | `test/core/bee_sync_test.dart` |
-| Retries, Retry-After (and its 24 h cap), max attempts, 401/413/4xx handling, splitting, rejected ids, redirects | `spec/fixtures/uploader/*.json`, run by Dart, Kotlin and Swift (23 cases × 3 seeds each) |
+| Retries, Retry-After (and its 24 h cap), max attempts, 401/413/4xx handling, splitting, rejected ids, redirects | `spec/fixtures/uploader/*.json`, run by Dart, Kotlin and Swift (26 cases × 3 seeds each) |
 | Consent (hold, drop, deny, persistence), retention (count, size, age), invalid events | `test/core/bee_sync_test.dart` |
 | SQLite store, leases, migration from schema v1, WAL | `test/store/` |
 | Wire format, gzip, HTTP status mapping | `test/transport/`, `NativeUploaderTest.kt`, `RunnerTests.swift` |
@@ -537,6 +565,7 @@ Copy this table into an issue or PR and fill it in.
 | A1–A5 foreground | | | | | |
 | B1–B9 failures | | | | | |
 | B10 at-least-once | | | – | – | |
+| B11–B12 offline | | | | | |
 | C1 auth | | | | | |
 | C2 auth in background | | | – | – | |
 | D1–D2 consent | | | | | |
@@ -547,3 +576,4 @@ Copy this table into an issue or PR and fill it in.
 | G2–G6 iOS BGTasks | – | – | – | | |
 | G7 Info.plist warnings | – | – | | | |
 | H1–H5 inspector | | | | | |
+| I1–I4 app events | | | | | |

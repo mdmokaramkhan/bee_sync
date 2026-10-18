@@ -408,6 +408,60 @@ void main() {
       expect(rig.transport.batches, hasLength(2));
       expect(rig.stored, 0);
     });
+
+    void startWithLongBackoff(Rig rig) {
+      rig.start(
+        retry: const RetryPolicy(
+          base: Duration(minutes: 10),
+          max: Duration(minutes: 10),
+        ),
+        batching: const BatchingPolicy(flushInterval: Duration(hours: 1)),
+      );
+    }
+
+    rigTest('a manual flush sends events waiting after network failures', (
+      rig,
+    ) {
+      startWithLongBackoff(rig);
+      rig.transport.enqueue(const NetworkFailure('offline'));
+      final a = rig.track('a', priority: Priority.immediate);
+      rig.elapse(const Duration(seconds: 1));
+      final b = rig.track('b');
+
+      rig.wait(rig.bee.flush());
+      expect(rig.transport.batches, hasLength(2));
+      expect([for (final e in rig.transport.batches[1].events) e.id], [a, b]);
+      expect(rig.stored, 0);
+    });
+
+    rigTest('returning to the foreground ends a network backoff', (rig) {
+      startWithLongBackoff(rig);
+      rig.transport.enqueue(const NetworkFailure('offline'));
+      rig.track('a', priority: Priority.immediate);
+      rig.elapse(const Duration(seconds: 1));
+      expect(rig.stored, 1);
+
+      rig.signals.foreground();
+      rig.elapse(const Duration(seconds: 1));
+      expect(rig.transport.batches, hasLength(2));
+      expect(rig.stored, 0);
+    });
+
+    rigTest('returning to the foreground keeps a backoff the server set', (
+      rig,
+    ) {
+      startWithLongBackoff(rig);
+      rig.transport.enqueue(
+        const RetryableFailure('HTTP 503', retryAfter: Duration(minutes: 30)),
+      );
+      rig.track('a', priority: Priority.immediate);
+      rig.elapse(const Duration(seconds: 1));
+
+      rig.signals.foreground();
+      rig.elapse(const Duration(seconds: 1));
+      expect(rig.transport.batches, hasLength(1));
+      expect(rig.stored, 1);
+    });
   });
 
   group('consent', () {

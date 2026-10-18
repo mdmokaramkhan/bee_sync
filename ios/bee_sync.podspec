@@ -1,6 +1,6 @@
 Pod::Spec.new do |s|
   s.name             = 'bee_sync'
-  s.version          = '0.3.0'
+  s.version          = '0.3.1'
   s.summary          = 'Durable, offline-first event delivery for Flutter.'
   s.description      = <<-DESC
 Persistent SQLite event queue with batching, retries and consent controls,

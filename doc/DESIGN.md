@@ -1,6 +1,6 @@
 # bee_sync — Design Document
 
-**Status:** Implemented through 0.3.0 · **Last updated:** 2026-10-18 · **Source:** `deep-research-report.md`
+**Status:** Implemented through 0.3.1 · **Last updated:** 2026-10-18 · **Source:** `deep-research-report.md`
 
 ---
 

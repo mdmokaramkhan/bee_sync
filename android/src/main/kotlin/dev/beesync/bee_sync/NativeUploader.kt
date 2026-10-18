@@ -13,7 +13,7 @@ import kotlin.math.min
 import kotlin.random.Random
 
 /** Keep in sync with `version` in pubspec.yaml. */
-internal const val BEE_SYNC_VERSION = "0.3.0"
+internal const val BEE_SYNC_VERSION = "0.3.1"
 
 internal object MetaKeys {
     const val CONSENT = "consent_state"

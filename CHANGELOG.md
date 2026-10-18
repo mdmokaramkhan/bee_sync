@@ -1,4 +1,4 @@
-## 0.3.1 (unreleased)
+## 0.3.1 — 2026-10-18
 
 A patch release fixing issues found in a full code review: an iOS App Store privacy requirement, data loss on HTTP redirects, and a possible crash on iOS. It also adds CI.
 

@@ -1,2 +1,2 @@
 /// Keep in sync with `version` in pubspec.yaml.
-const String beeSyncVersion = '0.3.0';
+const String beeSyncVersion = '0.3.1';

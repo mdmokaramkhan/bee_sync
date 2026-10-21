@@ -3,6 +3,11 @@
 ### Fixed
 * **Events queued offline could wait long after the network was back.** Each network failure doubles the wait (up to 10 minutes), and that wait outlived the outage: `flush()` skipped those events, and the Android worker, started *because* the network returned, skipped its run and rescheduled itself, which Android 14+ and OEM battery savers can postpone much further. Now an offline wait ends as soon as the network is known to work again: when any request gets a response, on app start, when the app returns to the foreground, on `flush()`, and when an Android job or iOS background task starts. Waits the server asked for (5xx, `Retry-After`) are kept.
 
+### Performance
+* **No more timer wake-ups in the background.** The app's interval flush kept running while the app was in the background, and Android can keep a backgrounded process alive for hours (longer with a foreground service), so the device woke every `flushInterval`. The timer now pauses in the background, where the native uploaders deliver, and resumes, with a flush, when the app returns.
+* **Large batches are encoded off the UI thread.** `HttpTransport` encodes and gzips batches of more than 10 events on a background isolate. A full 512 KB batch took about 10 ms on a Mac, several times that on a phone: enough to drop frames, once per batch while catching up after a long offline period. The UI isolate now spends about 0.1 ms on it.
+* Tracking no longer builds a trace log line for every event when trace logging is off. `BeeLogger` has a new `isEnabled(level)`; custom loggers that `implements` it need to add it (ones that `extends` it get a default).
+
 ### Changed
 * `PlatformSignals` has a new `appForegrounded` stream. Custom implementations need to add it; `FakePlatformSignals` has `foreground()`.
 * `flush()` now also sends events waiting after network failures.

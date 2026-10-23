@@ -13,6 +13,10 @@ abstract class BeeLogger {
   /// Discards everything.
   const factory BeeLogger.silent() = _SilentLogger;
 
+  /// Whether [level] would be logged. bee_sync checks it before building
+  /// costly messages, such as one per tracked event at [LogLevel.trace].
+  bool isEnabled(LogLevel level) => level != LogLevel.off;
+
   void log(
     LogLevel level,
     String message, {
@@ -27,13 +31,17 @@ class _ConsoleLogger extends BeeLogger {
   final LogLevel level;
 
   @override
+  bool isEnabled(LogLevel level) =>
+      level != LogLevel.off && level.index >= this.level.index;
+
+  @override
   void log(
     LogLevel level,
     String message, {
     Object? error,
     StackTrace? stackTrace,
   }) {
-    if (level == LogLevel.off || level.index < this.level.index) return;
+    if (!isEnabled(level)) return;
     developer.log(
       message,
       name: 'bee_sync',
@@ -49,6 +57,9 @@ class _ConsoleLogger extends BeeLogger {
 
 class _SilentLogger extends BeeLogger {
   const _SilentLogger();
+
+  @override
+  bool isEnabled(LogLevel level) => false;
 
   @override
   void log(

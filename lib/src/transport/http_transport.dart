@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
+import 'dart:isolate';
 
 import 'package:clock/clock.dart';
 import 'package:http/http.dart' as http;
@@ -46,11 +47,18 @@ class HttpTransport implements EventTransport {
     'timeout_ms': timeout.inMilliseconds,
   };
 
+  /// Batches with more events than this are encoded (and gzipped) on a
+  /// background isolate: a full 512 KB batch takes tens of milliseconds on a
+  /// phone, enough to drop frames. Smaller ones aren't worth an isolate.
+  static const backgroundEncodingMinEvents = 10;
+
   @override
   Future<TransportResult> send(EventBatch batch) async {
-    List<int> body = utf8.encode(
-      jsonEncode(encodeBatch(batch, sentAt: clock.now())),
-    );
+    final json = encodeBatch(batch, sentAt: clock.now());
+    final gzip = this.gzip;
+    final body = batch.events.length > backgroundEncodingMinEvents
+        ? await Isolate.run(() => _encodeBody(json, gzip: gzip))
+        : _encodeBody(json, gzip: gzip);
     final headers = {
       ..._headers,
       'Content-Type': 'application/json',
@@ -58,10 +66,7 @@ class HttpTransport implements EventTransport {
       'X-BeeSync-Sdk':
           'bee_sync/$beeSyncVersion (${Platform.operatingSystem}; dart)',
     };
-    if (gzip) {
-      body = GZipCodec().encode(body);
-      headers['Content-Encoding'] = 'gzip';
-    }
+    if (gzip) headers['Content-Encoding'] = 'gzip';
 
     final http.Response response;
     try {
@@ -86,6 +91,14 @@ class HttpTransport implements EventTransport {
   }
 
   void close() => _client.close();
+
+  static List<int> _encodeBody(
+    Map<String, Object?> json, {
+    required bool gzip,
+  }) {
+    final bytes = utf8.encode(jsonEncode(json));
+    return gzip ? GZipCodec().encode(bytes) : bytes;
+  }
 
   /// Maps an HTTP response to a [TransportResult].
   static TransportResult classify(

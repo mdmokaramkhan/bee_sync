@@ -79,6 +79,48 @@ void main() {
       expect((body as Map)['batch_id'], 'batch-1');
     });
 
+    for (final useGzip in [false, true]) {
+      test('large batches are encoded off the main isolate, identically '
+          '(gzip: $useGzip)', () async {
+        Future<Object?> sentBody(List<String> ids) async {
+          late http.Request captured;
+          final transport = HttpTransport(
+            endpoint: Uri.parse('https://example.com/e'),
+            gzip: useGzip,
+            client: MockClient((req) async {
+              captured = req;
+              return http.Response('', 200);
+            }),
+          );
+          await withClock(
+            Clock.fixed(DateTime.fromMillisecondsSinceEpoch(5000)),
+            () => transport.send(batchOf(ids)),
+          );
+          final bytes = useGzip
+              ? gzip.decode(captured.bodyBytes)
+              : captured.bodyBytes;
+          return jsonDecode(utf8.decode(bytes));
+        }
+
+        final ids = [for (var i = 0; i < 25; i++) 'e$i'];
+        expect(
+          ids.length,
+          greaterThan(HttpTransport.backgroundEncodingMinEvents),
+        );
+        final large = await sentBody(ids) as Map;
+        expect(large['sent_at'], 5000);
+        expect([
+          for (final e in large['events'] as List) (e as Map)['id'],
+        ], ids);
+        // Same encoding as the inline path, event for event.
+        final small = await sentBody(['e0']) as Map;
+        expect(
+          (large['events'] as List).first,
+          (small['events'] as List).single,
+        );
+      });
+    }
+
     test('network errors are network failures', () async {
       final transport = HttpTransport(
         endpoint: Uri.parse('https://example.com/e'),

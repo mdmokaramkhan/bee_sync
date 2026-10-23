@@ -183,10 +183,7 @@ class BeeSync implements FlushListener {
       ..add(_signals.appBackgrounded.listen((_) => _onBackgrounded()))
       ..add(_signals.appForegrounded.listen((_) => _onForegrounded()))
       ..add(_signals.connectivityRestored.listen((_) => _onConnectivity()));
-    _intervalTimer = Timer.periodic(
-      config.batching.flushInterval,
-      (_) => _onInterval(),
-    );
+    _startIntervalTimer();
     _ready.complete();
     _log.log(
       LogLevel.info,
@@ -302,7 +299,7 @@ class BeeSync implements FlushListener {
   ) async {
     if (name.isEmpty) throw const InvalidEventException('Event name is empty');
 
-    final List<int> payload;
+    final Uint8List payload;
     try {
       payload = utf8.encode(jsonEncode(properties));
     } on JsonUnsupportedObjectError catch (e) {
@@ -339,13 +336,15 @@ class BeeSync implements FlushListener {
       NewEvent(
         id: id,
         name: name,
-        payload: Uint8List.fromList(payload),
+        payload: payload,
         priority: priority,
         createdAt: now,
       ),
       now: now,
     );
-    _log.log(LogLevel.trace, 'Tracked $name $id ${utf8.decode(payload)}');
+    if (_log.isEnabled(LogLevel.trace)) {
+      _log.log(LogLevel.trace, 'Tracked $name $id ${utf8.decode(payload)}');
+    }
 
     var pending = totals.pending;
     if (retention.overflow == OverflowPolicy.dropOldest &&
@@ -472,8 +471,20 @@ class BeeSync implements FlushListener {
     _emit(FlushFailed(reason, retryAt: retryAt));
   }
 
+  void _startIntervalTimer() {
+    _intervalTimer ??= Timer.periodic(
+      config.batching.flushInterval,
+      (_) => _onInterval(),
+    );
+  }
+
   Future<void> _onBackgrounded() async {
     if (_closed) return;
+    // While the app is in the background the native uploaders deliver; an
+    // interval timer would only keep waking the device (Android can keep a
+    // backgrounded process alive for hours).
+    _intervalTimer?.cancel();
+    _intervalTimer = null;
     // Schedule before flushing: the OS often kills a backgrounded app while
     // that flush is still waiting on the network, and nothing would then be
     // scheduled to deliver what's left.
@@ -483,6 +494,8 @@ class BeeSync implements FlushListener {
   }
 
   void _onForegrounded() {
+    if (_closed) return;
+    _startIntervalTimer();
     // The network may have come back while the app was in the background,
     // unnoticed: end any backoff the outage caused (§3.3).
     _requestFlush(networkAvailable: true);

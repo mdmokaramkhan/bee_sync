@@ -447,6 +447,31 @@ void main() {
       expect(rig.stored, 0);
     });
 
+    rigTest('interval flushes pause in the background and resume after', (rig) {
+      rig.start(
+        retry: const RetryPolicy(
+          base: Duration(seconds: 1),
+          max: Duration(seconds: 1),
+        ),
+        batching: const BatchingPolicy(flushInterval: Duration(seconds: 10)),
+      );
+      rig.transport.fallback = (_) => const NetworkFailure('offline');
+      rig.track('a');
+      rig.signals.background(); // The backgrounding flush fails.
+      rig.elapse(const Duration(seconds: 1));
+      expect(rig.transport.batches, hasLength(1));
+
+      // Native uploaders cover the background: no timer wake-ups.
+      rig.elapse(const Duration(minutes: 2));
+      expect(rig.transport.batches, hasLength(1));
+
+      rig.signals.foreground();
+      rig.elapse(const Duration(seconds: 1));
+      expect(rig.transport.batches, hasLength(2));
+      rig.elapse(const Duration(seconds: 30));
+      expect(rig.transport.batches.length, greaterThanOrEqualTo(4));
+    });
+
     rigTest('returning to the foreground keeps a backoff the server set', (
       rig,
     ) {

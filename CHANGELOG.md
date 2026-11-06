@@ -1,4 +1,6 @@
-## 0.3.3 (unreleased)
+## 0.3.3 — 2026-11-06
+
+A hardening release from a full pre-production review: startup can no longer leave bee_sync off for good, `track()` never throws, a stuck request no longer stops delivery, and server-requested waits survive network changes. It also ends offline waits as soon as the network is back and cuts UI-thread work. Upgrading is recommended for all users; see **Upgrading** for two small API changes.
 
 ### Upgrading
 * **`track()` no longer throws.** Invalid events (empty name, non-JSON properties, over `maxEventBytes`) are logged and reported as `Dropped` with the new `DropReason.invalid`; other failures are logged. Code that caught `InvalidEventException` from `track()` can drop the `try`.

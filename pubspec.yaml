@@ -1,6 +1,6 @@
 name: bee_sync
 description: "Never lose an analytics event: durable, offline-first event delivery for Flutter with batching, retries, consent controls and native background upload."
-version: 0.3.2
+version: 0.3.3
 homepage: https://github.com/mdmokaramkhan/bee_sync
 repository: https://github.com/mdmokaramkhan/bee_sync
 issue_tracker: https://github.com/mdmokaramkhan/bee_sync/issues

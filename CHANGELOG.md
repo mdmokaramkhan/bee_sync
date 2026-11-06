@@ -1,14 +1,31 @@
-## 0.3.3 (unreleased)
+## 0.3.3 — 2026-11-06
+
+A hardening release from a full pre-production review: startup can no longer leave bee_sync off for good, `track()` never throws, a stuck request no longer stops delivery, and server-requested waits survive network changes. It also ends offline waits as soon as the network is back and cuts UI-thread work. Upgrading is recommended for all users; see **Upgrading** for two small API changes.
+
+### Upgrading
+* **`track()` no longer throws.** Invalid events (empty name, non-JSON properties, over `maxEventBytes`) are logged and reported as `Dropped` with the new `DropReason.invalid`; other failures are logged. Code that caught `InvalidEventException` from `track()` can drop the `try`.
+* **`DropReason` has a new value, `invalid`.** An exhaustive `switch` on `DropReason` needs a case for it.
 
 ### Fixed
+* **`BeeSync.instance` threw right after `initialize()` was called.** It was set only after the database path came back from the platform, so code that ran in that window (a splash screen's `initState`) got a `StateError`, and a second `initialize()` could slip through. It is now set before `initialize()` awaits anything.
+* **An unreadable or newer database disabled delivery on every launch.** A corrupt file, a non-database file, or a schema written by a newer version (after an app downgrade) made `initialize()` fail each time until the app was reinstalled. The file is now deleted and recreated, losing its queue, and a warning is logged.
+* **A failing retention sweep at startup failed `initialize()`.** It is now logged and retried on the next interval, as it already was while running.
+* **A send that never completed stopped all delivery until the app restarted.** Only one flush runs at a time, so a transport that hung held every later flush. A send now gives up after `leaseDuration` (60 s by default) and is treated as a network failure, so its events are kept.
+* **Regaining connectivity cleared waits the server asked for.** A 429, 5xx or `Retry-After` wait was reset on every network change, so a backend outage plus devices switching networks became a retry storm. Connectivity now only ends a wait caused by network failures, as the spec says.
+* **`flush()` during an automatic flush could return without sending.** It returned the running flush's result, which may have been an immediate-only pass or one held by a backoff or auth block that a manual flush ignores. It now runs its own pass after the running one.
+* **`track()` errors put property values in logs and crash reports.** The message for non-JSON properties included the value itself, which can be personal data. It now names only its type.
 * **Events queued offline could wait long after the network was back.** Each network failure doubles the wait (up to 10 minutes), and that wait outlived the outage: `flush()` skipped those events, and the Android worker, started *because* the network returned, skipped its run and rescheduled itself, which Android 14+ and OEM battery savers can postpone much further. Now an offline wait ends as soon as the network is known to work again: when any request gets a response, on app start, when the app returns to the foreground, on `flush()`, and when an Android job or iOS background task starts. Waits the server asked for (5xx, `Retry-After`) are kept.
 
 ### Performance
+* **A full queue no longer slows every `track()`.** At the event limit, each `track()` read every queued row onto the UI isolate to choose what to evict (10,000 rows at the default limit). Eviction now reads only the rows it needs, in pages.
+* **Stats are refreshed only when someone listens.** Every `track()` scheduled a stats query (three database calls) even with no listener on `stats`. `getStats()` is unchanged.
 * **No more timer wake-ups in the background.** The app's interval flush kept running while the app was in the background, and Android can keep a backgrounded process alive for hours (longer with a foreground service), so the device woke every `flushInterval`. The timer now pauses in the background, where the native uploaders deliver, and resumes, with a flush, when the app returns.
 * **Large batches are encoded off the UI thread.** `HttpTransport` encodes and gzips batches of more than 10 events on a background isolate. A full 512 KB batch took about 10 ms on a Mac, several times that on a phone: enough to drop frames, once per batch while catching up after a long offline period. The UI isolate now spends about 0.1 ms on it.
 * Tracking no longer builds a trace log line for every event when trace logging is off. `BeeLogger` has a new `isEnabled(level)`; custom loggers that `implements` it need to add it (ones that `extends` it get a default).
 
 ### Changed
+* **Auth headers are stored only while background delivery is on.** `HttpTransport`'s config, headers included, was written to the database in plain text on every start, although only the native uploaders read it. With `BackgroundConfig(enabled: false)` it is now removed.
+* `SqfliteEventStore.resolving(...)` creates a store whose path is resolved when it opens.
 * `PlatformSignals` has a new `appForegrounded` stream. Custom implementations need to add it; `FakePlatformSignals` has `foreground()`.
 * `flush()` now also sends events waiting after network failures.
 * `spec/uploader_contract.md`: runs take `network_available`, and the new `reset_backoff` statement ends a network backoff (§2, §3.3). Three new shared test cases.

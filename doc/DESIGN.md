@@ -1,6 +1,6 @@
 # bee_sync — Design Document
 
-**Status:** Implemented through 0.3.2 · **Last updated:** 2026-10-18
+**Status:** Implemented through 0.3.3 · **Last updated:** 2026-11-06
 
 ---
 
@@ -116,7 +116,7 @@ await bee.close();                                   // waits for in-flight trac
 Design notes:
 - `BeeSync.initialize` returns an instance; `BeeSync.instance` is a convenience singleton. The store, platform signals, random source and background scheduler can be injected for tests.
 - `track()` is safe to call on `BeeSync.instance` before `initialize` completes: calls wait for the store to open.
-- Properties must be JSON-encodable; validated at `track()` time. Events larger than `maxEventBytes` (default 32 KB) are rejected with an error, never silently truncated.
+- Properties must be JSON-encodable; validated at `track()` time. Invalid events (empty name, non-JSON properties, over `maxEventBytes`, default 32 KB) are logged and dropped as `DropReason.invalid`, never truncated. `track()` never throws: the log message names the offending type, never the value, which may be personal data.
 - `track()` returns the event id so apps can correlate.
 - Diagnostics for the inspector: `debugQueue()`, `debugActivity`, `debugSimulateOffline`.
 
@@ -142,7 +142,7 @@ class PermanentFailure extends TransportResult { final String reason; } // bisec
 
 ## 4. Data model
 
-Single file: `<app support dir>/bee_sync/bee_sync.db`. Schema version tracked in `PRAGMA user_version` (currently 2). Only Dart creates or migrates the file; Dart refuses a newer version than it knows, and native uploaders run only on exactly the version they were built for (otherwise they wait for the app's next launch to migrate).
+Single file: `<app support dir>/bee_sync/bee_sync.db`. Schema version tracked in `PRAGMA user_version` (currently 2). Only Dart creates or migrates the file. A file Dart cannot open (corrupt, not a database, or a newer schema after an app downgrade) is deleted and recreated, losing its queue, instead of disabling delivery on every launch; and native uploaders run only on exactly the version they were built for (otherwise they wait for the app's next launch to migrate).
 
 ```sql
 CREATE TABLE events (
@@ -229,7 +229,7 @@ An auth failure pauses automatic flushes in the foreground too; `setHeaders()` o
 | `track(priority: immediate)` | Dart | Persist, then claim with `immediateOnly=1` (debounced 50 ms to coalesce bursts). |
 | pending normal ≥ `flushAt` | Dart | Flush. |
 | `flushInterval` timer | Dart | Flush if anything is ready. |
-| Connectivity regained | Dart | Flush (connectivity is a hint only — the request is the real test). |
+| Connectivity regained | Dart | Flush, ending a wait caused by network failures; a wait the server asked for (429, 5xx, `Retry-After`) is kept (connectivity is a hint only — the request is the real test). |
 | App → background (`paused`) | Dart + native | Dart attempts a flush; native schedules background work if queue non-empty. |
 | `flush()` | Dart | Manual flush. |
 | WorkManager / BGTask fires | Native | Native uploader drains until empty, budget expires, or retryable failure. |

@@ -140,7 +140,22 @@ void main() {
       await store.close();
     });
 
-    test('refuses a database from a newer schema version', () async {
+    test('a resolving store asks for its path only when opened', () async {
+      var asked = 0;
+      final store = SqfliteEventStore.resolving(() async {
+        asked++;
+        return path;
+      }, factory: databaseFactoryFfiNoIsolate);
+      expect(store.databasePath, isNull);
+      expect(asked, 0);
+
+      await store.open();
+      addTearDown(store.close);
+      expect(store.databasePath, path);
+      expect(asked, 1);
+    });
+
+    test('recreates a database from a newer schema version', () async {
       final db = await databaseFactoryFfiNoIsolate.openDatabase(
         path,
         options: OpenDatabaseOptions(version: 99, onCreate: (_, _) {}),
@@ -151,7 +166,25 @@ void main() {
         path: path,
         factory: databaseFactoryFfiNoIsolate,
       );
-      await expectLater(store.open(), throwsA(isA<BeeSyncException>()));
+      await store.open();
+      addTearDown(store.close);
+
+      expect(store.recreatedAfter, isA<BeeSyncException>());
+      expect((await store.totals(0)).total, 0);
+    });
+
+    test('recreates a file that is not a database', () async {
+      File(path).writeAsStringSync('not a sqlite file' * 100);
+
+      final store = SqfliteEventStore(
+        path: path,
+        factory: databaseFactoryFfiNoIsolate,
+      );
+      await store.open();
+      addTearDown(store.close);
+
+      expect(store.recreatedAfter, isNotNull);
+      expect((await store.totals(0)).total, 0);
     });
   });
 }

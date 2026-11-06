@@ -31,6 +31,7 @@ class Rig {
     int maxEventBytes = 32 * 1024,
     EventTransport? transportOverride,
     BackgroundScheduler? background,
+    BackgroundConfig backgroundConfig = const BackgroundConfig(),
   }) {
     bee = wait(
       BeeSync.initialize(
@@ -41,6 +42,7 @@ class Rig {
           retention: retention,
           consent: consent,
           maxEventBytes: maxEventBytes,
+          background: backgroundConfig,
           logger: const BeeLogger.silent(),
         ),
         store: store,
@@ -392,13 +394,11 @@ void main() {
       expect(rig.sentNames, ['ok']);
     });
 
-    rigTest('connectivity restored resets backoff and flushes', (rig) {
+    rigTest('connectivity restored ends a network backoff and flushes', (rig) {
       rig.start(
         batching: const BatchingPolicy(flushInterval: Duration(hours: 1)),
       );
-      rig.transport.enqueue(
-        const RetryableFailure('offline', retryAfter: Duration(minutes: 30)),
-      );
+      rig.transport.enqueue(const NetworkFailure('offline'));
       rig.track('a', priority: Priority.immediate);
       rig.elapse(const Duration(seconds: 1));
       expect(rig.transport.batches, hasLength(1));
@@ -407,6 +407,22 @@ void main() {
       rig.elapse(const Duration(seconds: 1));
       expect(rig.transport.batches, hasLength(2));
       expect(rig.stored, 0);
+    });
+
+    rigTest('connectivity restored keeps a wait the server asked for', (rig) {
+      rig.start(
+        batching: const BatchingPolicy(flushInterval: Duration(hours: 1)),
+      );
+      rig.transport.enqueue(
+        const RetryableFailure('HTTP 503', retryAfter: Duration(minutes: 30)),
+      );
+      rig.track('a', priority: Priority.immediate);
+      rig.elapse(const Duration(seconds: 1));
+
+      rig.signals.restoreConnectivity();
+      rig.elapse(const Duration(seconds: 1));
+      expect(rig.transport.batches, hasLength(1));
+      expect(rig.stored, 1);
     });
 
     void startWithLongBackoff(Rig rig) {
@@ -586,18 +602,15 @@ void main() {
   });
 
   group('validation', () {
-    rigTest('rejects invalid events', (rig) {
+    rigTest('drops invalid events instead of throwing', (rig) {
       rig.start(maxEventBytes: 50);
-      expect(() => rig.track(''), throwsA(isA<InvalidEventException>()));
-      expect(
-        () => rig.track('a', properties: {'when': DateTime(2026)}),
-        throwsA(isA<InvalidEventException>()),
-      );
-      expect(
-        () => rig.track('a', properties: {'p': 'x' * 100}),
-        throwsA(isA<InvalidEventException>()),
-      );
+      final ids = [
+        rig.track(''),
+        rig.track('a', properties: {'when': DateTime(2026)}),
+        rig.track('a', properties: {'p': 'x' * 100}),
+      ];
       expect(rig.stored, 0);
+      expect(rig.droppedIds(DropReason.invalid), ids);
     });
   });
 
@@ -972,6 +985,44 @@ void main() {
     });
   });
 
+  test('a send that never answers is given up after the lease', () {
+    fakeAsync((async) {
+      final rig = Rig(async)
+        ..start(
+          transportOverride: FakeTransport(latency: const Duration(days: 1)),
+          batching: const BatchingPolicy(flushInterval: Duration(hours: 1)),
+        );
+      rig.track('a', priority: Priority.immediate);
+      rig.elapse(const Duration(seconds: 61));
+
+      expect(rig.stored, 1, reason: 'kept, as after a network failure');
+      expect(rig.eventsOf<FlushFailed>(), isNotEmpty);
+      rig.close();
+    });
+  });
+
+  test('auth headers are stored only while background delivery is on', () {
+    String? storedConfig({required bool background}) {
+      String? config;
+      fakeAsync((async) {
+        final rig = Rig(async)
+          ..start(
+            transportOverride: HttpTransport(
+              endpoint: Uri.parse('https://example.com/events'),
+              headers: const {'Authorization': 'Bearer secret'},
+            ),
+            backgroundConfig: BackgroundConfig(enabled: background),
+          );
+        config = rig.wait(rig.store.getMeta(MetaKeys.transportConfig));
+        rig.close();
+      });
+      return config;
+    }
+
+    expect(storedConfig(background: false), isNull);
+    expect(storedConfig(background: true), contains('Bearer secret'));
+  });
+
   test('close() waits for a track() already in progress', () {
     fakeAsync((async) {
       final store = _SlowInsertStore();
@@ -983,13 +1034,18 @@ void main() {
           .then((_) => tracked = true, onError: (Object e) => trackError = e);
       async.flushMicrotasks(); // track() is now waiting on the slow insert
       final closing = rig.bee.close();
-      expect(() => rig.bee.track('late'), throwsStateError);
+      final late = rig.bee.track('late');
 
       store.unblock.complete();
       rig.wait(closing);
       expect(trackError, isNull);
       expect(tracked, isTrue);
       expect(store.closedAfterInsert, isTrue);
+      expect(
+        rig.wait(late),
+        isNotEmpty,
+        reason: 'track() after close() is a no-op',
+      );
     });
   });
 

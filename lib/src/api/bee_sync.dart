@@ -66,9 +66,11 @@ class BeeSync implements FlushListener {
     if (_instance != null) {
       throw StateError('BeeSync is already initialized; call close() first');
     }
+    // No await before `_instance` is set: `instance` must work from this call
+    // on, and a second initialize must see the first.
     final bee = BeeSync._(
       config,
-      store ?? SqfliteEventStore(path: await _defaultDatabasePath()),
+      store ?? SqfliteEventStore.resolving(_defaultDatabasePath),
       signals ?? FlutterPlatformSignals(),
       random ?? Random.secure(),
       background ??
@@ -170,13 +172,31 @@ class BeeSync implements FlushListener {
       logger: config.logger,
     );
     await _store.open();
+    if (_store case SqfliteEventStore(:final recreatedAfter?)) {
+      _log.log(
+        LogLevel.warn,
+        'Could not open the queue database, so it was recreated; events '
+        'queued in it are lost',
+        error: recreatedAfter,
+      );
+    }
     await _loadConsent();
     await _persistTransportConfig();
     await _store.setMeta(
       MetaKeys.deliveryConfig,
       jsonEncode(DeliverySettings.fromConfig(config).toJson()),
     );
-    await _enforceRetention();
+    try {
+      await _enforceRetention();
+    } catch (e, st) {
+      // Retried on every interval tick; never worth failing startup for.
+      _log.log(
+        LogLevel.warn,
+        'Retention sweep failed',
+        error: e,
+        stackTrace: st,
+      );
+    }
     await _configureBackground();
 
     _subscriptions
@@ -269,30 +289,56 @@ class BeeSync implements FlushListener {
 
   /// Persists an event and returns its id once it is durable on disk.
   ///
-  /// Throws [InvalidEventException] for an empty [name], non-JSON
-  /// [properties], or a payload over `maxEventBytes`. Events refused by
-  /// consent or the overflow policy are not stored; they are reported on
-  /// [events] as [Dropped] and still get an id.
+  /// Never throws, so it is safe to call without awaiting. An empty [name],
+  /// non-JSON [properties] or a payload over `maxEventBytes` is logged and
+  /// reported on [events] as [Dropped] with [DropReason.invalid]. Events
+  /// refused by consent or the overflow policy are reported the same way with
+  /// their reason. Any other failure (bee_sync failed to start or is closed,
+  /// the disk is full) is logged and the event is lost. Every call gets an id.
   Future<String> track(
     String name, {
     Map<String, Object?> properties = const {},
     Priority priority = Priority.normal,
   }) async {
-    if (!_ready.isCompleted) await _ready.future;
-    _checkOpen();
-    // close() waits for tracks already in progress before closing the store.
-    _activeTracks++;
+    final id = _uuid.v7();
     try {
-      return await _track(name, properties, priority);
-    } finally {
-      if (--_activeTracks == 0) {
-        _tracksIdle?.complete();
-        _tracksIdle = null;
+      if (!_ready.isCompleted) await _ready.future;
+      _checkOpen();
+      // close() waits for tracks already in progress before closing the store.
+      _activeTracks++;
+      try {
+        await _track(id, name, properties, priority);
+      } finally {
+        if (--_activeTracks == 0) {
+          _tracksIdle?.complete();
+          _tracksIdle = null;
+        }
       }
+    } on InvalidEventException catch (e) {
+      _log.log(LogLevel.warn, e.message);
+      try {
+        await _recordDropped([id], DropReason.invalid);
+      } on Object catch (e, st) {
+        _log.log(
+          LogLevel.warn,
+          'Could not count a dropped event',
+          error: e,
+          stackTrace: st,
+        );
+      }
+    } on Object catch (e, st) {
+      _log.log(
+        LogLevel.error,
+        'Event "$name" was not stored',
+        error: e,
+        stackTrace: st,
+      );
     }
+    return id;
   }
 
-  Future<String> _track(
+  Future<void> _track(
+    String id,
     String name,
     Map<String, Object?> properties,
     Priority priority,
@@ -303,8 +349,11 @@ class BeeSync implements FlushListener {
     try {
       payload = utf8.encode(jsonEncode(properties));
     } on JsonUnsupportedObjectError catch (e) {
+      // The type only: the value itself can be personal data, and this message
+      // reaches logs.
       throw InvalidEventException(
-        'Properties of "$name" are not JSON-encodable: ${e.unsupportedObject}',
+        'Properties of "$name" are not JSON-encodable: '
+        '${e.unsupportedObject.runtimeType}',
       );
     }
     if (payload.length > config.maxEventBytes) {
@@ -314,10 +363,9 @@ class BeeSync implements FlushListener {
       );
     }
 
-    final id = _uuid.v7();
     if (!_acceptsNewEvents) {
       await _recordDropped([id], DropReason.noConsent);
-      return id;
+      return;
     }
 
     final now = clock.now().millisecondsSinceEpoch;
@@ -327,7 +375,7 @@ class BeeSync implements FlushListener {
       if (t.total + 1 > retention.maxEvents ||
           t.bytes + payload.length > retention.maxBytes) {
         await _recordDropped([id], DropReason.overflow);
-        return id;
+        return;
       }
     }
 
@@ -371,7 +419,6 @@ class BeeSync implements FlushListener {
       _requestFlush();
     }
     _scheduleStats();
-    return id;
   }
 
   bool get _acceptsNewEvents => switch (_consent) {
@@ -411,6 +458,15 @@ class BeeSync implements FlushListener {
     bool networkAvailable = false,
   }) {
     final running = _runningFlush;
+    if (running != null && manual) {
+      // The running pass may be immediate-only or held by a backoff or auth
+      // block, which a manual flush ignores, so it runs its own pass after it.
+      return running.then(
+        (_) => _flush(manual: true, networkAvailable: networkAvailable),
+        onError: (Object _) =>
+            _flush(manual: true, networkAvailable: networkAvailable),
+      );
+    }
     if (running != null) {
       // Coalesce: one more pass after the current one picks up new events.
       _flushAgain = true;
@@ -539,13 +595,10 @@ class BeeSync implements FlushListener {
 
   Future<void> _onConnectivity() async {
     if (_closed) return;
-    try {
-      // The outage was probably why we were backing off; try again now.
-      await _resetBackoff();
-    } catch (e, st) {
-      _log.log(LogLevel.warn, 'Backoff reset failed', error: e, stackTrace: st);
-    }
-    _requestFlush();
+    // Ends a wait caused by network failures only; a wait the server asked
+    // for (429, 5xx, Retry-After) is kept, so a backend outage does not turn
+    // every network change into a retry storm (spec/uploader_contract.md §3.3).
+    _requestFlush(networkAvailable: true);
   }
 
   Future<void> _enforceRetention() async {
@@ -601,9 +654,11 @@ class BeeSync implements FlushListener {
 
   /// Mirrors [HttpTransport] settings for the native uploader. With any other
   /// transport the key is removed, which tells native not to upload.
+  /// Only the native uploaders read the stored config, and it holds the auth
+  /// headers in plain text, so it is kept only while background delivery is on.
   Future<void> _persistTransportConfig() async {
     final transport = config.transport;
-    if (transport is HttpTransport) {
+    if (transport is HttpTransport && config.background.enabled) {
       await _store.setMeta(
         MetaKeys.transportConfig,
         jsonEncode(transport.toConfigJson()),
@@ -773,7 +828,7 @@ class BeeSync implements FlushListener {
   }
 
   void _scheduleStats() {
-    if (_closed || _statsTimer != null) return;
+    if (_closed || _statsTimer != null || !_statsController.hasListener) return;
     _statsTimer = Timer(_statsDebounce, () async {
       _statsTimer = null;
       if (_closed) return;

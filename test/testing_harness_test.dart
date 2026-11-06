@@ -25,9 +25,9 @@ void main() {
     addTearDown(harness.close);
 
     await harness.bee.track('a');
-    final result = await harness.bee.flush();
+    await harness.bee.flush();
 
-    expect(result.status, FlushStatus.backingOff);
+    expect(harness.transport.batches, hasLength(1));
     expect((await harness.bee.getStats()).pending, 1);
   });
 }

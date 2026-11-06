@@ -264,7 +264,7 @@ expiration: the request is cancelled, the task completes, leases release the row
 1. Turn airplane mode on and tap **Track immediate**. This fails with a network error.
 2. Turn airplane mode off.
 
-**Expect:** delivered within a few seconds, without waiting for the 15 s interval. Regaining connectivity resets the backoff.
+**Expect:** delivered within a few seconds, without waiting for the 15 s interval. Regaining connectivity ends a backoff caused by network failures; a wait the server asked for (503 with `Retry-After`) is kept.
 
 ### B11 · Being offline never drops events
 **Where:** both · **Server:** `ok`

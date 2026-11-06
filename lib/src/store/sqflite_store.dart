@@ -1,4 +1,6 @@
 import 'dart:convert';
+import 'dart:io';
+import 'dart:math';
 import 'dart:typed_data';
 
 import 'package:sqflite/sqflite.dart';
@@ -14,16 +16,42 @@ import 'sql.dart' as sql;
 /// background uploaders use, which keeps POSIX file locks consistent within
 /// the process (see doc/DESIGN.md §2.1).
 class SqfliteEventStore implements EventStore {
-  SqfliteEventStore({required this.path, DatabaseFactory? factory})
-    : _factory = factory ?? databaseFactory;
+  SqfliteEventStore({required String path, DatabaseFactory? factory})
+    : _path = path,
+      _resolvePath = null,
+      _factory = factory ?? databaseFactory;
 
-  /// Database file path, or [inMemoryDatabasePath].
-  final String path;
+  /// Resolves the path in [open], so the store can be created synchronously
+  /// before the platform has answered where the file lives.
+  SqfliteEventStore.resolving(
+    Future<String> Function() resolvePath, {
+    DatabaseFactory? factory,
+  }) : _path = null,
+       _resolvePath = resolvePath,
+       _factory = factory ?? databaseFactory;
+
+  String? _path;
+  final Future<String> Function()? _resolvePath;
   final DatabaseFactory _factory;
   Database? _db;
 
+  /// Database file path, or [inMemoryDatabasePath]. Known once [open] has
+  /// started for a store created with [SqfliteEventStore.resolving].
+  String get path =>
+      _path ?? (throw StateError('SqfliteEventStore path is not resolved yet'));
+
+  /// Why [open] deleted and recreated the database, when it had to: a file it
+  /// could not open (corrupt, not a database) or one written by a newer
+  /// version of bee_sync. Queued events in that file are lost.
+  Object? recreatedAfter;
+
+  /// Extra rows per eviction page, for when the byte limit needs more than the
+  /// count overflow.
+  static const _evictPageSlack = 64;
+
   @override
-  String? get databasePath => path == inMemoryDatabasePath ? null : path;
+  String? get databasePath =>
+      _path == null || _path == inMemoryDatabasePath ? null : _path;
 
   Database get _database {
     final db = _db;
@@ -33,37 +61,53 @@ class SqfliteEventStore implements EventStore {
 
   @override
   Future<void> open() async {
-    _db = await _factory.openDatabase(
-      path,
-      options: OpenDatabaseOptions(
-        version: sql.schemaVersion,
-        onConfigure: (db) async {
-          // Both PRAGMAs return a row, so they must go through rawQuery.
-          await db.rawQuery('PRAGMA journal_mode = WAL');
-          await db.rawQuery('PRAGMA busy_timeout = 5000');
-        },
-        onCreate: (db, version) async {
-          final batch = db.batch()
-            ..execute(sql.createEvents)
-            ..execute(sql.createEventsReadyIndex)
-            ..execute(sql.createMeta)
-            ..execute(sql.createBgLog)
-            ..execute(sql.createCounters);
-          await batch.commit(noResult: true);
-        },
-        onUpgrade: (db, oldVersion, newVersion) async {
-          if (oldVersion < 2) await _migrateV1ToV2(db);
-        },
-        onDowngrade: (db, oldVersion, newVersion) {
-          throw BeeSyncException(
-            'bee_sync database is schema v$oldVersion but this version of '
-            'bee_sync only understands up to v$newVersion. Was the app '
-            'downgraded?',
-          );
-        },
-      ),
-    );
+    final path = _path ??= await _resolvePath!();
+    try {
+      _db = await _open(path);
+    } on Object catch (e) {
+      if (path == inMemoryDatabasePath) rethrow;
+      // A file that can never open would otherwise disable delivery on every
+      // launch until the app is reinstalled.
+      recreatedAfter = e;
+      await _factory.deleteDatabase(path);
+      for (final suffix in const ['-wal', '-shm', '-journal']) {
+        final file = File('$path$suffix');
+        if (file.existsSync()) file.deleteSync();
+      }
+      _db = await _open(path);
+    }
   }
+
+  Future<Database> _open(String path) => _factory.openDatabase(
+    path,
+    options: OpenDatabaseOptions(
+      version: sql.schemaVersion,
+      onConfigure: (db) async {
+        // Both PRAGMAs return a row, so they must go through rawQuery.
+        await db.rawQuery('PRAGMA journal_mode = WAL');
+        await db.rawQuery('PRAGMA busy_timeout = 5000');
+      },
+      onCreate: (db, version) async {
+        final batch = db.batch()
+          ..execute(sql.createEvents)
+          ..execute(sql.createEventsReadyIndex)
+          ..execute(sql.createMeta)
+          ..execute(sql.createBgLog)
+          ..execute(sql.createCounters);
+        await batch.commit(noResult: true);
+      },
+      onUpgrade: (db, oldVersion, newVersion) async {
+        if (oldVersion < 2) await _migrateV1ToV2(db);
+      },
+      onDowngrade: (db, oldVersion, newVersion) {
+        throw BeeSyncException(
+          'bee_sync database is schema v$oldVersion but this version of '
+          'bee_sync only understands up to v$newVersion. Was the app '
+          'downgraded?',
+        );
+      },
+    ),
+  );
 
   @override
   Future<void> close() async {
@@ -226,13 +270,25 @@ class SqfliteEventStore implements EventStore {
       var bytes = t['bytes']! as int;
       if (count <= maxEvents && bytes <= maxBytes) return const <String>[];
 
+      // Paged, so a full queue does not load every row onto the UI isolate
+      // on each track(): usually one small page covers the overflow.
       final ids = <String>[];
-      final rows = await txn.rawQuery(sql.selectEvictable, [now]);
-      for (final r in rows) {
-        if (count <= maxEvents && bytes <= maxBytes) break;
-        ids.add(r['id']! as String);
-        count--;
-        bytes -= r['size_bytes']! as int;
+      var offset = 0;
+      while (count > maxEvents || bytes > maxBytes) {
+        final page = max(count - maxEvents, 0) + _evictPageSlack;
+        final rows = await txn.rawQuery(sql.selectEvictable, [
+          now,
+          page,
+          offset,
+        ]);
+        if (rows.isEmpty) break;
+        for (final r in rows) {
+          if (count <= maxEvents && bytes <= maxBytes) break;
+          ids.add(r['id']! as String);
+          count--;
+          bytes -= r['size_bytes']! as int;
+        }
+        offset += rows.length;
       }
       await _deleteIds(txn, ids);
       return ids;

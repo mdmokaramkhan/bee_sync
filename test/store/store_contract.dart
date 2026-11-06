@@ -213,6 +213,15 @@ void runStoreContract(String label, Future<EventStore> Function() create) {
       expect(await store.evict(now: 0, maxEvents: 100, maxBytes: 15), isEmpty);
     });
 
+    test('evict pages through a large queue when bytes are over', () async {
+      for (var i = 0; i < 300; i++) {
+        await add('e$i', size: 10);
+      }
+      final evicted = await store.evict(now: 0, maxEvents: 1000, maxBytes: 100);
+      expect(evicted, [for (var i = 0; i < 290; i++) 'e$i']);
+      expect((await store.totals(0)).total, 10);
+    });
+
     test('purge removes everything and returns the ids', () async {
       await add('1');
       await add('2');

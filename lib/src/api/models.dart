@@ -56,6 +56,10 @@ enum DropReason {
 
   /// Removed by `BeeSync.purgeQueue()`.
   purged,
+
+  /// Refused by `track()`: an empty name, properties that are not JSON, or a
+  /// payload over `maxEventBytes`.
+  invalid,
 }
 
 /// One event inside an [EventBatch] handed to a transport.

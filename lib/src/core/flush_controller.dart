@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:math';
 
@@ -228,7 +229,18 @@ class FlushController {
     final TransportResult result;
     final stopwatch = clock.stopwatch()..start();
     try {
-      result = await _transport.send(batch);
+      // A send that never completes would hold the single running flush, and
+      // with it all delivery, until the app restarts. After the lease the
+      // events may be claimed again anyway.
+      result = await _transport
+          .send(batch)
+          .timeout(Duration(milliseconds: _settings.leaseMs));
+    } on TimeoutException {
+      final failure = NetworkFailure(
+        'No response within the ${_settings.leaseMs ~/ 1000}s lease',
+      );
+      _listener?.onRequest(batch, failure, stopwatch.elapsed);
+      return _retry(readable, failure);
     } catch (e, st) {
       _log.log(LogLevel.warn, 'Transport threw', error: e, stackTrace: st);
       final failure = RetryableFailure('Transport threw: $e');

@@ -127,11 +127,12 @@ SELECT id FROM events
 WHERE created_at < ? AND (lease_owner IS NULL OR lease_until < ?)''';
 
 /// Eviction order: normal priority before immediate, oldest first.
-/// params: now
+/// params: now, limit, offset
 const String selectEvictable = '''
 SELECT id, size_bytes FROM events
 WHERE lease_owner IS NULL OR lease_until < ?
-ORDER BY priority ASC, seq ASC''';
+ORDER BY priority ASC, seq ASC
+LIMIT ? OFFSET ?''';
 
 /// Read-only listing for the inspector, FIFO. params: limit
 const String inspectEvents = '''
